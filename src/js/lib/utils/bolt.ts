@@ -207,8 +207,26 @@ export const initBolt = (log = true) => {
     const jsxSrc = `${extRoot}/jsx/index.js`;
     const jsxBinSrc = `${extRoot}/jsx/index.jsxbin`;
     if (fs.existsSync(jsxSrc)) {
-      if (log) console.log(jsxSrc);
-      evalFile(jsxSrc);
+      // ⚠ PR 2021（15.2）/Windows 实测：$.evalFile 会报 "Cannot convert"，
+      // host 层永远加载不上（PR 2026 的新脚本引擎不受影响，所以 mac 上没暴露）。
+      // 对策：用 Node 读入文件内容，整体 evalScript 执行（19KB 实测可行）。
+      try {
+        const code = fs.readFileSync(jsxSrc, "utf-8");
+        csi.evalScript(
+          "try{" +
+            code +
+            "\n}catch(e){'ROCX_JSX_ERR ' + (e && e.message ? e.message : e) + ' @line ' + (e && e.line !== undefined ? e.line : '?');}",
+          (res: string) => {
+            if (res && res.indexOf("ROCX_JSX_ERR") === 0) {
+              console.error("[initBolt] jsx 加载失败:", res);
+            } else if (log) {
+              console.log("[initBolt] jsx 加载完成");
+            }
+          }
+        );
+      } catch (e) {
+        console.error("[initBolt] jsx 读取失败:", e);
+      }
     } else if (fs.existsSync(jsxBinSrc)) {
       if (log) console.log(jsxBinSrc);
       evalFile(jsxBinSrc);

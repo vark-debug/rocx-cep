@@ -79,11 +79,92 @@ export function isNodeAvailable(): boolean {
   return !!(child_process && typeof child_process.execFile === "function");
 }
 
+// ---------- 环境块净化（Windows spawn ENOMEM 对策） ----------
+
+/**
+ * 为什么需要净化：
+ *   Windows 版 Premiere 里点「一键安装」报 `spawn ENOMEM`，
+ *   但同一命令在系统终端 2 秒装完；系统内存明明充足。
+ *   结论：不是内存不足，是 CEP 内嵌 Node（旧 libuv）在 Windows 上
+ *   创建子进程时对「从宿主继承来的环境块」非常敏感：
+ *     - `process.env` 里混有 `=C:` / `=D:` 这类隐藏变量（键名以 '=' 开头），
+ *       旧版 libuv 序列化环境块时不剔除，CreateProcess 直接失败；
+ *     - PR 继承的环境块可能超长（Windows 环境块上限 32767 字符）。
+ *   两种情况都被 libuv 映射成 UV_ENOMEM，于是看到误导性的 "spawn ENOMEM"。
+ *
+ * 对策分两档：
+ *   1) 首次 spawn：剔除非法键与超长值后照常执行；
+ *   2) 仍报 ENOMEM/E2BIG：改用「最小安全环境」重试一次
+ *      （只保留进程创建必需的变量 + PATH）。
+ */
+
+/** 判断一次 spawn 失败是否疑似环境块问题 */
+function looksLikeSpawnEnvFailure(err: any): boolean {
+  if (!err) return false;
+  const code = typeof err.code === "string" ? err.code.toUpperCase() : "";
+  if (code === "ENOMEM" || code === "E2BIG" || code === "ENOBUFS") return true;
+  const msg = String((err as any).message || err);
+  return /spawn\s+(ENOMEM|E2BIG|ENOBUFS)/i.test(msg);
+}
+
+/** 最小安全环境要保留的键（Windows） */
+const WIN_SAFE_ENV_KEYS = [
+  "PATH", "Path",
+  "SystemRoot", "SystemDrive", "windir", "WINDIR", "ComSpec", "COMSPEC",
+  "TEMP", "TMP", "PATHEXT",
+  "APPDATA", "LOCALAPPDATA", "ProgramData", "ProgramFiles", "ProgramFiles(x86)",
+  "USERPROFILE", "HOMEDRIVE", "HOMEPATH", "USERNAME", "COMPUTERNAME",
+  "NUMBER_OF_PROCESSORS", "OS", "PROCESSOR_ARCHITECTURE", "USERDOMAIN",
+];
+
+/** 最小安全环境要保留的键（macOS） */
+const POSIX_SAFE_ENV_KEYS = [
+  "PATH", "HOME", "TMPDIR", "SHELL", "LANG", "LC_ALL", "TERM", "USER", "LOGNAME",
+];
+
+/** 构造最小安全环境：只保留子进程定位可执行文件与读写用户目录所需变量 */
+function buildSafeEnv(): Record<string, string> {
+  const src = (process.env || {}) as unknown as Record<string, string>;
+  const out: Record<string, string> = {};
+  const keys = isWindows() ? WIN_SAFE_ENV_KEYS : POSIX_SAFE_ENV_KEYS;
+  for (const k of keys) {
+    const v = src[k];
+    if (typeof v === "string" && v.length) out[k] = v;
+  }
+  if (isWindows()) {
+    if (!out.PATH && !out.Path) out.Path = "C:\\Windows\\System32;C:\\Windows";
+    if (!out.SystemRoot) out.SystemRoot = "C:\\Windows";
+    if (!out.ComSpec) out.ComSpec = "C:\\Windows\\System32\\cmd.exe";
+    const home = homeDir();
+    if (!out.TEMP && home) out.TEMP = path.join(home, "AppData", "Local", "Temp");
+    if (!out.TMP && home) out.TMP = out.TEMP;
+  } else if (!out.PATH) {
+    out.PATH = "/usr/local/bin:/usr/bin:/bin";
+  }
+  return out;
+}
+
+/** 净化环境块：剔除空键名 / '=' 开头的隐藏变量 / 超长值 */
+function sanitizeEnv(env: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const k of Object.keys(env || {})) {
+    if (!k || k.charCodeAt(0) === 61) continue; // '=' 开头（=C: 等隐藏变量）
+    const v = (env as any)[k];
+    if (typeof v !== "string" || !v.length) continue;
+    if (v.length > 16384) continue; // 单条超长值直接丢弃（防环境块超限）
+    out[k] = v;
+  }
+  return out;
+}
+
 /**
  * 起一个子进程并收集输出。
  *
  * 不用 shell（execFile 而非 exec）—— 命令参数全部以数组下发，
  * 用户输入（提示词 / 路径）不会进入 shell 解析，天然免疫命令注入。
+ *
+ * 环境块策略：传入的环境先净化；若 Windows 下报 ENOMEM/E2BIG，
+ * 自动用最小安全环境重试一次（见上方「环境块净化」注释）。
  */
 export function runProcess(
   exe: string,
@@ -101,39 +182,62 @@ export function runProcess(
       });
       return;
     }
-    try {
-      child_process.execFile(
-        exe,
-        args,
-        {
-          timeout: opts.timeoutMs ?? 60000,
-          maxBuffer: 32 * 1024 * 1024,
-          cwd: opts.cwd,
-          env: opts.env,
-          windowsHide: true,
-        },
-        (err: any, stdout: string, stderr: string) => {
-          const timedOut = !!(err && (err.killed || err.signal === "SIGTERM"));
-          const exitCode =
-            err && typeof err.code === "number" ? err.code : err ? 1 : 0;
-          resolve({
-            ok: !err,
-            exitCode,
-            out: stdout || "",
-            err: stderr || (err ? String(err.message || err) : ""),
-            timedOut,
-          });
-        },
-      );
-    } catch (e: any) {
-      resolve({
-        ok: false,
-        exitCode: -1,
-        out: "",
-        err: String(e?.message || e),
-        timedOut: false,
-      });
-    }
+    let settled = false;
+    let usedSafeEnv = false;
+    const finish = (r: RunResult) => {
+      if (!settled) {
+        settled = true;
+        resolve(r);
+      }
+    };
+    const attempt = (env: Record<string, string> | undefined) => {
+      try {
+        child_process.execFile(
+          exe,
+          args,
+          {
+            timeout: opts.timeoutMs ?? 60000,
+            maxBuffer: 32 * 1024 * 1024,
+            cwd: opts.cwd,
+            env,
+            windowsHide: true,
+          },
+          (err: any, stdout: string, stderr: string) => {
+            // 超时被杀的进程不算环境块失败，不重试
+            const isKill = !!(err && (err.killed || err.signal));
+            if (err && !isKill && !usedSafeEnv && looksLikeSpawnEnvFailure(err)) {
+              usedSafeEnv = true;
+              attempt(buildSafeEnv());
+              return;
+            }
+            const timedOut = !!(err && (err.killed || err.signal === "SIGTERM"));
+            const exitCode =
+              err && typeof err.code === "number" ? err.code : err ? 1 : 0;
+            finish({
+              ok: !err,
+              exitCode,
+              out: stdout || "",
+              err: stderr || (err ? String(err.message || err) : ""),
+              timedOut,
+            });
+          },
+        );
+      } catch (e: any) {
+        if (!usedSafeEnv && looksLikeSpawnEnvFailure(e)) {
+          usedSafeEnv = true;
+          attempt(buildSafeEnv());
+          return;
+        }
+        finish({
+          ok: false,
+          exitCode: -1,
+          out: "",
+          err: String(e?.message || e),
+          timedOut: false,
+        });
+      }
+    };
+    attempt(opts.env ? sanitizeEnv(opts.env) : undefined);
   });
 }
 
@@ -619,25 +723,42 @@ export async function spawnKlingCli(
   if (!isNodeAvailable()) {
     return { ok: false, error: "Node 环境不可用（CEP 未启用 --enable-nodejs）。" };
   }
-  try {
-    const proc = child_process.spawn(entry.nodePath, [entry.cliJs, ...args], {
-      env: process.env as unknown as Record<string, string>,
-      windowsHide: true,
-    });
-    const forward = (chunk: any) => {
-      if (!onOutput) return;
-      const text = String(chunk || "");
-      for (const line of text.split(/\r?\n/)) {
-        if (line.trim()) onOutput(line.trim());
+  let triedSafeEnv = false;
+  const start = (env: Record<string, string>) => {
+    try {
+      const proc = child_process.spawn(entry.nodePath, [entry.cliJs, ...args], {
+        env,
+        windowsHide: true,
+      });
+      const forward = (chunk: any) => {
+        if (!onOutput) return;
+        const text = String(chunk || "");
+        for (const line of text.split(/\r?\n/)) {
+          if (line.trim()) onOutput(line.trim());
+        }
+      };
+      proc.stdout?.on("data", forward);
+      proc.stderr?.on("data", forward);
+      proc.on("error", (e: any) => {
+        // ENOMEM/E2BIG → 最小安全环境重试一次
+        if (!triedSafeEnv && looksLikeSpawnEnvFailure(e)) {
+          triedSafeEnv = true;
+          start(buildSafeEnv());
+          return;
+        }
+        onOutput?.(`启动失败: ${e?.message || e}`);
+      });
+    } catch (e: any) {
+      if (!triedSafeEnv && looksLikeSpawnEnvFailure(e)) {
+        triedSafeEnv = true;
+        start(buildSafeEnv());
+        return;
       }
-    };
-    proc.stdout?.on("data", forward);
-    proc.stderr?.on("data", forward);
-    proc.on("error", (e: any) => onOutput?.(`启动失败: ${e?.message || e}`));
-    return { ok: true };
-  } catch (e: any) {
-    return { ok: false, error: String(e?.message || e) };
-  }
+      onOutput?.(`启动失败: ${e?.message || e}`);
+    }
+  };
+  start(sanitizeEnv(process.env as unknown as Record<string, string>));
+  return { ok: true };
 }
 
 /** 供 UI 展示用：把错误码翻译成一句人话 */

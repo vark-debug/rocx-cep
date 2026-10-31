@@ -10,8 +10,11 @@
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = new URL("..", import.meta.url).pathname;
+// fileURLToPath 而非 .pathname：Windows 下 .pathname 产生 "/C:/..."，
+// 拼接后会得到 "C:\C:\..." 双盘符路径
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const SRC = join(ROOT, "src", "jsx");
 
 /** 禁用的内建方法（ES5+） */
