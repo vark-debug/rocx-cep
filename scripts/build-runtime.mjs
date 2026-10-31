@@ -22,6 +22,7 @@
 import { execFileSync } from "node:child_process";
 import { copyFileSync, createWriteStream, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 
@@ -64,7 +65,8 @@ function parseArgs() {
 
 /** 拉取 node dist 索引，取 NODE_MAJOR 最新的 LTS 版本号 */
 async function resolveNodeVersion(platform) {
-  const indexFile = path.join(process.env.TMPDIR || "/tmp", `node-dist-index-${Date.now()}.json`);
+  // os.tmpdir() 跨平台（Windows 没有 /tmp，硬编码会 ENOENT）
+  const indexFile = path.join(os.tmpdir(), `node-dist-index-${Date.now()}.json`);
   try {
     await download(`${NODE_DIST}/index.json`, indexFile);
   } catch (e) {
