@@ -20,7 +20,7 @@
  * 这里仍然按目标平台分别构建，保证布局与自检与真实安装环境一致。
  */
 import { execFileSync } from "node:child_process";
-import { createWriteStream, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { copyFileSync, createWriteStream, existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import path from "node:path";
 import process from "node:process";
@@ -107,6 +107,14 @@ async function download(url, dest, attempt = 0) {
 /** 运行命令（同步，失败即抛） */
 function run(cmd, args, opts = {}) {
   console.log(`  $ ${cmd} ${args.join(" ")}`);
+  // Windows 上 npm 是 npm.cmd，execFile 不能直接跑 .cmd（Node 限制）→ 经 cmd /c
+  if (process.platform === "win32" && /^(npm|npx)$/.test(cmd)) {
+    execFileSync("cmd.exe", ["/d", "/s", "/c", cmd, ...args], {
+      stdio: "inherit",
+      ...opts,
+    });
+    return;
+  }
   execFileSync(cmd, args, { stdio: "inherit", ...opts });
 }
 
@@ -137,17 +145,21 @@ async function main() {
   mkdirSync(binDir, { recursive: true });
   const nodeExe = path.join(binDir, isWin ? "node.exe" : "node");
   if (isWin) {
-    // unzip 到 tmp，再拷 node.exe（系统 unzip 处理 zip）
-    run("unzip", ["-q", archive, "-d", tmp]);
+    // Windows runner 没有 unzip 命令：用系统自带 PowerShell Expand-Archive
+    run("powershell.exe", [
+      "-NoProfile",
+      "-Command",
+      `Expand-Archive -LiteralPath '${archive}' -DestinationPath '${tmp}' -Force`,
+    ]);
     const from = path.join(tmp, nodeBase, "node.exe");
     if (!existsSync(from)) throw new Error(`解压后未找到 node.exe: ${from}`);
-    execFileSync("cp", [from, nodeExe]);
+    copyFileSync(from, nodeExe);
   } else {
     // tar 解压后直接拿 bin/node（保留可执行位）
     run("tar", ["-xzf", archive, "-C", tmp]);
     const from = path.join(tmp, nodeBase, "bin", "node");
     if (!existsSync(from)) throw new Error(`解压后未找到 node: ${from}`);
-    execFileSync("cp", [from, nodeExe]);
+    copyFileSync(from, nodeExe);
     execFileSync("chmod", ["+x", nodeExe]);
   }
   if (!statSync(nodeExe).isFile()) throw new Error("node 二进制拷贝失败");

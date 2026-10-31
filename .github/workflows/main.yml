@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - "*.*.*"
+  # 手动触发（分支验证打包链路用；Release 上传仅限 tag）
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -60,6 +62,17 @@ jobs:
             build/pkg/*.pkg
           generate_release_notes: true
 
+      # 手动跑（非 tag）时用 artifact 拿产物验证
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          name: macos-dist
+          path: |
+            RocX-CEP_*.zip
+            com.rocx.cep.zxp
+            build/pkg/*.pkg
+
   # windows：exe 安装包（Inno Setup per-user 免管理员）
   windows:
     runs-on: windows-latest
@@ -103,3 +116,10 @@ jobs:
           files: |
             build/exe/*.exe
           generate_release_notes: true
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        if: ${{ !startsWith(github.ref, 'refs/tags/') }}
+        with:
+          name: windows-dist
+          path: build/exe/*.exe
