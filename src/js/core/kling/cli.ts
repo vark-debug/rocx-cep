@@ -413,6 +413,9 @@ export async function locateNpmRoots(
   } else {
     const appdata = process.env?.APPDATA || "";
     if (appdata) roots.push(path.join(appdata, "npm", "node_modules"));
+    // Windows 下降级安装（--prefix ~/.npm-global）的布局没有 lib/ 一层
+    const home = homeDir();
+    if (home) roots.push(path.join(home, ".npm-global", "node_modules"));
   }
 
   // 去重（保持顺序）

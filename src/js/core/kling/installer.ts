@@ -87,10 +87,12 @@ export type InstallProgress = (stage: string, detail?: string) => void;
 /** npm 输出里表示「权限不足」的关键词 */
 function looksLikePermissionError(text: string): boolean {
   const t = (text || "").toLowerCase();
+  // 注意：不要匹配裸的 "err!" —— npm 的任何报错（网络、404、EBUSY…）都带
+  // "npm err!" 前缀，宽匹配会把所有失败都误判成权限问题并触发无意义降级。
   return (
     t.includes("eacces") ||
+    t.includes("eperm") ||
     t.includes("permission denied") ||
-    t.includes("err!") ||
     t.includes("access is denied") ||
     t.includes("operation not permitted")
   );
@@ -153,6 +155,8 @@ export async function installKlingCli(
   });
 
   let usedPrefix = "";
+  // 记住首次安装的错误输出，验证失败时透出，便于定位真实原因
+  const firstError = (r.err || r.out || "").trim();
 
   if (!r.ok && looksLikePermissionError(r.err || r.out)) {
     // 权限问题 → 降级到用户级 prefix
@@ -193,7 +197,9 @@ export async function installKlingCli(
       ok: false,
       packageName: pkg,
       prefix: usedPrefix || undefined,
-      message: `安装命令执行成功，但仍未探测到 ${pkg}。请检查 npm 全局目录是否在 PATH 或插件的探测范围内。`,
+      message: `安装命令执行成功，但仍未探测到 ${pkg}。请检查 npm 全局目录是否在 PATH 或插件的探测范围内。${
+        firstError ? `（首次安装输出：${firstError.slice(0, 300)}）` : ""
+      }`,
     };
   }
 
