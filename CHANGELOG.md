@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.0 (2026-10-31)
+
+与 UXP 版对齐：接入三家 HTTP 直连生成服务。
+
+- **provider 体系**（自 RocX UXP 版移植，Node 层化）：
+  - MiniMax 视频：`MiniMax-H3`（768P/2K）/ `H3-Max`（480P/768P），4–15s，参考素材上传后以 `mm_file://` 引用
+  - RunningHub 图片：Seedream 5.0 Pro 文生图 / 图生图（base64 data URI 直传），1K/2K
+  - 火山方舟（Ark）图片：Seedream 5.0 Pro，同步出图；提示词含透明关键词自动走透明底画布
+- **面板**：provider 切换器（CEP 原生 select 弹不出来，走自定义浮层）；模型/时长/分辨率/画幅
+  按 provider 声明的值域自动收敛；可灵仍走 CLI 链路不受影响
+- **API Key 管理**：per-provider 存插件数据目录 `api-keys.json`（0600 权限）；设置面板内配置
+- **dry-run 模式**：设置面板开关；开启后提交被拦截，只构造并打印请求（无 Key 也能验证全链），
+  记录标注「dry-run 模拟任务」
+- webhook 上报 `purpose` 自动跟随真实 provider（`minimax_image_to_video` / `ark_text_to_image` 等）
+
 ## 0.2.0 (2026-10-31)
 
 一步到位安装包 + 生成上报。
