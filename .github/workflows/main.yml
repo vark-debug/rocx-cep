@@ -1,0 +1,47 @@
+name: ZIP Release
+
+on:
+  push:
+    tags:
+      - "*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - run: npm ci
+
+      # ZIP 安装包（未签名，配合 PlayerDebugMode 使用）→ dist/cep/
+      - run: npm run zip
+        env:
+          NODE_ENV: production
+
+      # 两种安装形态：
+      #   RocX-CEP_*.zip   = 扩展文件夹（解压到 CEP extensions 目录 + PlayerDebugMode）
+      #   com.rocx.cep.zxp = ZXP 安装包（ZXP Installer 拖装）
+      - name: Package extension folder
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          mkdir -p release/com.rocx.cep
+          cp -R dist/cep/. release/com.rocx.cep/
+          (cd release && zip -rq "../RocX-CEP_${VERSION}.zip" com.rocx.cep)
+          cp dist/zxp/com.rocx.cep.zxp .
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            RocX-CEP_*.zip
+            com.rocx.cep.zxp
+          generate_release_notes: true

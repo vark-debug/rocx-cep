@@ -1,0 +1,57 @@
+/**
+ * Panel ↔ Node 层 的类型化接口面（唯一入口）
+ *
+ * 面板（src/js/main）只允许从这里 import —— 不直接碰 cli / fs / child_process。
+ * CEP 的 Node 层与面板同进程（`--mixed-context`），所以这里的「桥」就是
+ * 普通的 ES module import，不需要 Comlink / 消息协议。
+ */
+export {
+  // 可灵环境
+  subscribeKlingState,
+  getKlingEnv,
+  getKlingModels,
+  getKlingImageModels,
+  getKlingDefaultModel,
+  getKlingImageDefaultModel,
+  bootstrapKlingEnv,
+  refreshKlingEnvInBackground,
+  startKlingLogin,
+  logoutKling,
+  checkKlingReady,
+  KlingProviderError,
+} from "./kling/provider";
+
+export { installKlingCli } from "./kling/installer";
+export type { InstallResult, InstallProgress } from "./kling/installer";
+
+export {
+  subscribeGeneration,
+  getRecords,
+  getProjectInfo,
+  getSequenceInfoSnapshot,
+  syncProject,
+  submitGeneration,
+  submitImageGeneration,
+  importRecordToProject,
+  removeRecord,
+  retryGeneration,
+} from "./generation";
+export type { ProjectInfo } from "./generation";
+export type {
+  GenerationRecord,
+  GenerationRecordStatus,
+  GenerationReference,
+  GenerationKind,
+  KlingImageModelDescriptor,
+  KlingModelDescriptor,
+} from "../../shared/types";
+
+export { captureClip, captureFrame, warmUpReference } from "./capture";
+export type { CaptureFrameResult } from "./capture";
+
+export { openInPhotoshop } from "./ps";
+export type { OpenPsResult } from "./ps";
+export { invalidateKlingUpload } from "./kling/preUpload";
+
+export { registerMedia } from "./storage/mediaServer";
+export { readImageDataUrl } from "./storage/image";
