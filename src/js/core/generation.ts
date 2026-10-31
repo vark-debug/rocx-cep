@@ -9,6 +9,21 @@
  */
 import { submitVideo, submitImage, queryTask, queryImageTask } from "./kling/provider";
 import type { KlingProviderError } from "./kling/provider";
+import {
+  ensureProvidersRegistered,
+  getImageProvider,
+  getVideoProvider,
+  isDryRun,
+  isDryRunTaskId,
+} from "./providers";
+import type {
+  ImageGenCreateRequest,
+  ProviderRef,
+  VideoGenCreateRequest,
+} from "./providers";
+import { ratioToSize } from "./providers/runninghub/wireFormat";
+import { fileToDataUri } from "./providers/core/http";
+import { getApiKey } from "./storage/apiKeys";
 import { getSequenceInfo, importFiles } from "./ppro";
 import { downloadToFile, guessFileName } from "./storage/download";
 import { probePrimary, readRecords, writeRecords } from "./storage/records";
@@ -267,6 +282,7 @@ function resumeInterruptedPolls(records: GenerationRecord[]): void {
       rec.taskId,
       rec.traceId || "",
       rec.kind === "image" ? "image" : "video",
+      rec.params?.provider || "kling",
     );
   }
 }
@@ -277,9 +293,10 @@ function trackPoll(
   taskId: string,
   traceId: string,
   kind: "video" | "image",
+  providerId = "kling",
 ): void {
   pollingIds.add(recordId);
-  void pollTask(recordId, taskId, traceId, kind).finally(() => {
+  void pollTask(recordId, taskId, traceId, kind, providerId).finally(() => {
     pollingIds.delete(recordId);
   });
 }
@@ -319,16 +336,164 @@ function updateRecord(id: string, patch: Partial<GenerationRecord>): void {
 
 // ---------- 提交 ----------
 
+/** provider 分流通用的提交结果 */
+interface GenericSubmit {
+  taskId: string;
+  traceId?: string;
+  creditsConsumed?: number;
+}
+
+/** GenerationReference → ProviderRef（provider 链引用，含本地路径与文件名） */
+function toProviderRef(r: GenerationReference): ProviderRef {
+  return {
+    type: r.type,
+    localPath: r.localPath,
+    fileName: r.fileName,
+    sizeBytes: r.sizeBytes,
+  };
+}
+
+/**
+ * 上传参考素材到 provider；单条失败只跳过不整体失败（对齐 UXP ensureRefs 语义）。
+ * provider 未实现 uploadFile 时引用原样传递（CLI 自带素材直传的语义）。
+ */
+async function uploadReferences(
+  providerId: string,
+  refs: GenerationReference[],
+  apiKey: string,
+): Promise<{ refs: ProviderRef[]; skipped: number }> {
+  const provider = getVideoProvider(providerId);
+  const out: ProviderRef[] = [];
+  let skipped = 0;
+  for (const r of refs) {
+    const ref = toProviderRef(r);
+    try {
+      if (!provider?.uploadFile) {
+        out.push(ref);
+        continue;
+      }
+      const up = await provider.uploadFile({
+        apiKey,
+        localPath: ref.localPath,
+        fileName:
+          ref.fileName ||
+          ref.localPath.split(/[\\/]/).pop() ||
+          "ref.bin",
+      });
+      if (up.ok && up.fileId) {
+        out.push({
+          ...ref,
+          fileId: up.fileId,
+          uploadProvider: providerId,
+          uploadedAt: new Date().toISOString(),
+        });
+      } else {
+        skipped++;
+        console.warn(`[${providerId}] 参考素材上传失败（已跳过）:`, up.error);
+      }
+    } catch (e) {
+      skipped++;
+      console.warn(`[${providerId}] 参考素材上传异常（已跳过）:`, e);
+    }
+  }
+  return { refs: out, skipped };
+}
+
+/** 走 HTTP provider 提交视频生成（minimax） */
+async function submitViaVideoProvider(
+  providerId: string,
+  req: KlingVideoRequest,
+  references: GenerationReference[],
+): Promise<GenericSubmit> {
+  ensureProvidersRegistered();
+  const provider = getVideoProvider(providerId);
+  if (!provider) throw new Error(`provider "${providerId}" 未注册`);
+
+  // dry-run 开启时跳过 Key 检查：无 Key 也能走完「请求构造 + 上传分流」验证
+  const apiKey = getApiKey(providerId);
+  if (!apiKey && !isDryRun()) {
+    throw new Error(
+      `未配置 ${provider.displayName} API Key，请在设置面板里配置后重试`,
+    );
+  }
+
+  const up = await uploadReferences(providerId, references, apiKey);
+  if (up.skipped > 0) {
+    console.warn(`[${providerId}] ${up.skipped} 条参考素材未上传成功，已跳过`);
+  }
+
+  const createReq: VideoGenCreateRequest = {
+    model: req.model,
+    prompt: req.prompt,
+    ratio: req.ratio,
+    duration: req.duration,
+    resolution: req.resolution,
+    references: up.refs,
+  };
+  const r = await provider.createVideo(createReq, apiKey);
+  return { taskId: r.taskId, creditsConsumed: r.creditsConsumed };
+}
+
+/** 走 HTTP provider 提交图片生成（runninghub / ark） */
+async function submitViaImageProvider(
+  providerId: string,
+  req: KlingImageRequest,
+  references: GenerationReference[],
+): Promise<GenericSubmit> {
+  ensureProvidersRegistered();
+  const provider = getImageProvider(providerId);
+  if (!provider) throw new Error(`provider "${providerId}" 未注册（图片）`);
+
+  // 同上：dry-run 优先于 Key 检查
+  const apiKey = getApiKey(providerId);
+  if (!apiKey && !isDryRun()) {
+    throw new Error(
+      `未配置 ${provider.displayName} API Key，请在设置面板里配置后重试`,
+    );
+  }
+
+  // 图片 provider 吃 base64 data URI 直传 —— 不做预上传（对齐 UXP 直传通道）
+  const dataUris: string[] = [];
+  for (const r of references) {
+    try {
+      dataUris.push(await fileToDataUri(r.localPath));
+    } catch (e) {
+      console.warn(`[${providerId}] 参考图读取失败（已跳过）:`, r.localPath, e);
+    }
+  }
+
+  // width/height 由 ratio+resolution 映射（预设档）；resolution 归一化到 provider 值域
+  const resolution = /^2k$/i.test(req.resolution) ? "2K" : "1K";
+  const { width, height } = ratioToSize(req.ratio, resolution);
+
+  const createReq: ImageGenCreateRequest = {
+    model: req.model,
+    prompt: req.prompt,
+    ratio: req.ratio,
+    width,
+    height,
+    outputFormat: "png",
+    resolutionTier: req.resolution,
+    count: req.count,
+    references: references.map(toProviderRef),
+    referencesDataUris: dataUris,
+  };
+  const r = await provider.createImage(createReq, apiKey);
+  return { taskId: r.taskId, creditsConsumed: r.creditsConsumed };
+}
+
 /**
  * 提交一次视频生成。
  *
  * 返回记录对象；生成过程在后台轮询，完成后自动下载并导入工程。
+ * provider 分流：kling 走 CLI 链；其他走 HTTP provider（注册表）。
  */
 export async function submitGeneration(
   req: KlingVideoRequest,
-  options?: { references?: GenerationReference[] },
+  options?: { references?: GenerationReference[]; providerId?: string },
 ): Promise<GenerationRecord> {
   const references = options?.references ?? [];
+  const providerId = options?.providerId || "kling";
   const tool = req.references?.some((r) => r.type === "reference_video")
     ? "omni_ref_video"
     : references.length
@@ -340,7 +505,7 @@ export async function submitGeneration(
     kind: "video",
     prompt: req.prompt,
     params: {
-      provider: "kling",
+      provider: providerId,
       model: req.model,
       ratio: req.ratio,
       duration: req.duration,
@@ -360,9 +525,18 @@ export async function submitGeneration(
   emit();
 
   try {
-    // 素材预上传 + 提交
     updateRecord(record.id, { pendingStage: "submitting" });
-    const submitted = await submitVideo(req);
+    const submitted: GenericSubmit =
+      providerId === "kling"
+        ? await (async () => {
+            const s = await submitVideo(req);
+            return {
+              taskId: s.taskId,
+              traceId: s.traceId,
+              creditsConsumed: s.creditsConsumed,
+            };
+          })()
+        : await submitViaVideoProvider(providerId, req, references);
     updateRecord(record.id, {
       taskId: submitted.taskId,
       traceId: submitted.traceId,
@@ -371,7 +545,7 @@ export async function submitGeneration(
       pendingStage: undefined,
       submittedAt: nowIso(),
     });
-    trackPoll(record.id, submitted.taskId, submitted.traceId, "video");
+    trackPoll(record.id, submitted.taskId, submitted.traceId || "", "video", providerId);
     // 提交即上报（fire-and-forget；可灵提交即扣费，status=submitted）
     void reportGenerated(findRecord(record.id) ?? record);
   } catch (e) {
@@ -398,9 +572,10 @@ export async function submitGeneration(
  */
 export async function submitImageGeneration(
   req: KlingImageRequest,
-  options?: { references?: GenerationReference[] },
+  options?: { references?: GenerationReference[]; providerId?: string },
 ): Promise<GenerationRecord> {
   const references = options?.references ?? [];
+  const providerId = options?.providerId || "kling";
   // 图片模式只吃图片参考（视频参考会被可灵拒收）
   const imageRefs = references.filter((r) => r.type === "reference_image");
   const tool = imageRefs.length ? "image_to_image" : "text_to_image";
@@ -410,7 +585,7 @@ export async function submitImageGeneration(
     kind: "image",
     prompt: req.prompt,
     params: {
-      provider: "kling",
+      provider: providerId,
       model: req.model,
       ratio: req.ratio,
       duration: 0,
@@ -432,7 +607,17 @@ export async function submitImageGeneration(
 
   try {
     updateRecord(record.id, { pendingStage: "submitting" });
-    const submitted = await submitImage(req);
+    const submitted: GenericSubmit =
+      providerId === "kling"
+        ? await (async () => {
+            const s = await submitImage(req);
+            return {
+              taskId: s.taskId,
+              traceId: s.traceId,
+              creditsConsumed: s.creditsConsumed,
+            };
+          })()
+        : await submitViaImageProvider(providerId, req, imageRefs);
     updateRecord(record.id, {
       taskId: submitted.taskId,
       traceId: submitted.traceId,
@@ -441,7 +626,7 @@ export async function submitImageGeneration(
       pendingStage: undefined,
       submittedAt: nowIso(),
     });
-    trackPoll(record.id, submitted.taskId, submitted.traceId, "image");
+    trackPoll(record.id, submitted.taskId, submitted.traceId || "", "image", providerId);
     // 提交即上报（fire-and-forget；可灵提交即扣费，status=submitted）
     void reportGenerated(findRecord(record.id) ?? record);
   } catch (e) {
@@ -460,12 +645,45 @@ export async function submitImageGeneration(
 
 // ---------- 轮询 ----------
 
+/**
+ * HTTP provider 的任务查询 → KlingQueryResult 形状（轮询循环统一消费）。
+ * dry-run 任务直接返回 failed（请求构造已验证，不产生真实结果）。
+ */
+async function queryProviderTask(
+  providerId: string,
+  kind: "video" | "image",
+  taskId: string,
+): Promise<KlingQueryResult> {
+  if (isDryRunTaskId(taskId)) {
+    return {
+      status: "failed",
+      error: "dry-run 模拟任务：请求构造已验证，不产生真实结果",
+    };
+  }
+  ensureProvidersRegistered();
+  const provider =
+    kind === "image" ? getImageProvider(providerId) : getVideoProvider(providerId);
+  if (!provider) {
+    return {
+      status: "failed",
+      error: `provider "${providerId}" 未注册`,
+    };
+  }
+  const r = await provider.queryTask(taskId, getApiKey(providerId));
+  return {
+    status: r.status === "cancelled" ? "failed" : r.status,
+    url: r.content?.url,
+    error: r.error?.message,
+  };
+}
+
 /** 后台轮询一个任务，直到终态 */
 async function pollTask(
   recordId: string,
   taskId: string,
   traceId: string,
   kind: "video" | "image",
+  providerId = "kling",
 ): Promise<void> {
   let interval = POLL_START_MS;
   let failures = 0;
@@ -475,9 +693,11 @@ async function pollTask(
 
     try {
       const res: KlingQueryResult =
-        kind === "image"
-          ? await queryImageTask(taskId, traceId)
-          : await queryTask(taskId, traceId);
+        providerId === "kling"
+          ? kind === "image"
+            ? await queryImageTask(taskId, traceId)
+            : await queryTask(taskId, traceId)
+          : await queryProviderTask(providerId, kind, taskId);
       failures = 0;
       updateRecord(recordId, {
         // 还在排队 → pending；已经在跑 → generating
@@ -636,13 +856,14 @@ export function removeRecord(recordId: string): void {
   }
 }
 
-/** 重试一个失败的任务（用同一个模型 / 提示词重新提交） */
+/** 重试一个失败的任务（用同一个 provider / 模型 / 提示词重新提交） */
 export async function retryGeneration(
   recordId: string,
 ): Promise<GenerationRecord | null> {
   const rec = findRecord(recordId);
   if (!rec) return null;
   const refs = rec.references || [];
+  const providerId = rec.params?.provider || "kling";
 
   if (rec.kind === "image") {
     return submitImageGeneration(
@@ -657,7 +878,7 @@ export async function retryGeneration(
           localPath: r.localPath,
         })),
       },
-      { references: refs },
+      { references: refs, providerId },
     );
   }
 
@@ -673,7 +894,7 @@ export async function retryGeneration(
         localPath: r.localPath,
       })),
     },
-    { references: refs },
+    { references: refs, providerId },
   );
 }
 

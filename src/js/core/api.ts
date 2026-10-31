@@ -56,3 +56,46 @@ export { invalidateKlingUpload } from "./kling/preUpload";
 
 export { registerMedia } from "./storage/mediaServer";
 export { readImageDataUrl } from "./storage/image";
+
+// ---------- HTTP provider（minimax / runninghub / ark） ----------
+
+export {
+  ensureProvidersRegistered,
+  isDryRun,
+  setDryRun,
+} from "./providers";
+import {
+  ensureProvidersRegistered,
+  videoProviderOptions as _videoProviderOptions,
+  imageProviderOptions as _imageProviderOptions,
+  listModels as _listProviderModels,
+  listImageModels as _listProviderImageModels,
+} from "./providers";
+export type { ProviderOption, ProviderModelDescriptor } from "./providers";
+
+/** 选项/清单查询前确保三家已注册（注册幂等）—— 否则面板首屏只有 kling 一项 */
+export function videoProviderOptions() {
+  ensureProvidersRegistered();
+  return _videoProviderOptions();
+}
+
+export function imageProviderOptions() {
+  ensureProvidersRegistered();
+  return _imageProviderOptions();
+}
+
+export function listProviderModels(providerId?: string) {
+  ensureProvidersRegistered();
+  return _listProviderModels(providerId);
+}
+
+export function listProviderImageModels(providerId?: string) {
+  ensureProvidersRegistered();
+  return _listProviderImageModels(providerId);
+}
+
+export {
+  getApiKey,
+  setApiKey,
+  listConfiguredProviders,
+} from "./storage/apiKeys";
