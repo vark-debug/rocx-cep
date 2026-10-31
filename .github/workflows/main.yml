@@ -17,9 +17,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: npm
 
-      - run: npm ci
+      # 仓库是 yarn.lock（无 package-lock.json），npm ci 不可用
+      - run: npm install --legacy-peer-deps
 
       # ZIP 安装包（未签名，配合 PlayerDebugMode 使用）→ dist/cep/
       - run: npm run zip
