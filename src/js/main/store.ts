@@ -29,16 +29,19 @@ export interface GenRef {
 /** 生成模式：视频 / 图片 */
 export type GenMode = "video" | "image";
 
-/** 视频侧参数（模型 + 画幅 + 时长 + 分辨率） */
+/** 视频侧参数（provider + 模型 + 画幅 + 时长 + 分辨率） */
 export interface VideoParams {
+  /** 提交通道："kling"（CLI）| "minimax" 等（HTTP provider） */
+  provider: string;
   model: string;
   ratio: string;
   duration: string;
   resolution: string;
 }
 
-/** 图片侧参数（模型 + 画幅 + img_resolution + 张数） */
+/** 图片侧参数（provider + 模型 + 画幅 + img_resolution + 张数） */
 export interface ImageParams {
+  provider: string;
   model: string;
   ratio: string;
   /** img_resolution 档位："1k" / "2k" / "4k" */
@@ -64,8 +67,8 @@ export const EMPTY_GEN_STATE: GenState = {
   mode: "video",
   prompt: "",
   refs: [],
-  video: { model: "", ratio: "", duration: "", resolution: "" },
-  image: { model: "", ratio: "", resolution: "", count: "" },
+  video: { provider: "kling", model: "", ratio: "", duration: "", resolution: "" },
+  image: { provider: "kling", model: "", ratio: "", resolution: "", count: "" },
 };
 
 /** 生成器表单的读写接口 */
@@ -171,6 +174,7 @@ export function useGenStore(): GenStore {
               prompt: rec.prompt,
               refs,
               image: {
+                provider: rec.params.provider || "kling",
                 model: rec.params.model,
                 ratio: rec.params.ratio,
                 resolution: rec.params.resolution,
@@ -183,6 +187,7 @@ export function useGenStore(): GenStore {
               prompt: rec.prompt,
               refs,
               video: {
+                provider: rec.params.provider || "kling",
                 model: rec.params.model,
                 ratio: rec.params.ratio,
                 duration: String(rec.params.duration),

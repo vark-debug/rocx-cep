@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   captureClip,
   captureFrame,
   checkKlingReady,
+  getApiKey,
   getKlingDefaultModel,
   getKlingEnv,
   getKlingImageDefaultModel,
@@ -10,7 +11,11 @@ import {
   getKlingModels,
   getProjectInfo,
   getSequenceInfoSnapshot,
+  imageProviderOptions,
   invalidateKlingUpload,
+  isDryRun,
+  listProviderImageModels,
+  listProviderModels,
   openInPhotoshop,
   readImageDataUrl,
   submitGeneration,
@@ -18,6 +23,7 @@ import {
   subscribeGeneration,
   subscribeKlingState,
   testWebhookReport,
+  videoProviderOptions,
   warmUpReference,
 } from "../../core/api";
 import type { GenMode, GenStore } from "../store";
@@ -90,6 +96,112 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
 
   const isImage = gen.mode === "image";
 
+  // ---- provider（提交通道）：kling 走 CLI；其余走 HTTP provider（需 API Key）----
+  const providerOptions = useMemo(
+    () => (isImage ? imageProviderOptions() : videoProviderOptions()),
+    [isImage],
+  );
+  const curProvider = isImage ? gen.image.provider : gen.video.provider;
+
+  /**
+   * 统一模型视图：kling（CLI，who_am_i 动态清单）与 HTTP provider（静态清单）
+   * 的描述符字段不同，归一成 UI 消费的形状。
+   */
+  const curProviderModels = useMemo<UiModel[]>(() => {
+    if (curProvider === "kling") {
+      return isImage
+        ? imageModels.map((m) => ({
+            modelId: m.modelId,
+            displayName: m.displayName,
+            ratios: m.ratios,
+            durations: [],
+            resolutions: m.resolutions,
+            counts: m.counts,
+            defaultResolution: m.defaultResolution,
+            defaultRatio: m.defaultRatio,
+            imageInput: m.imageInput,
+          }))
+        : videoModels.map((m) => ({
+            modelId: m.modelId,
+            displayName: m.displayName,
+            ratios: m.ratios,
+            durations: m.durations,
+            resolutions: m.resolutions,
+            counts: [],
+            imageInput: m.imageInput,
+          }));
+    }
+    const raw = isImage
+      ? listProviderImageModels(curProvider)
+      : listProviderModels(curProvider);
+    return raw.map((m) => ({
+      modelId: m.modelId,
+      displayName: m.displayName,
+      ratios: m.paramConstraints.ratios,
+      durations: m.paramConstraints.durations,
+      resolutions: m.paramConstraints.resolutions,
+      // 图片 provider 单次出 1 张（RunningHub 工作流固定 1 张）
+      counts: isImage ? ["1"] : [],
+      imageInput: m.capabilities.some(
+        (c) =>
+          c === "imageReference" ||
+          c === "videoReference" ||
+          c === "audioReference",
+      ),
+    }));
+  }, [curProvider, isImage, videoModels, imageModels]);
+
+  const current =
+    curProviderModels.find(
+      (m) => m.modelId === (isImage ? gen.image.model : gen.video.model),
+    ) || curProviderModels[0];
+
+  // 模型清单到达 / 切 provider / 换模型后：选定默认模型 + 参数收敛到该模型值域
+  useEffect(() => {
+    if (!current) return;
+    gen.patchFn((prev) => {
+      if (isImage) {
+        const p = prev.image;
+        if (p.provider !== curProvider) return {}; // provider 已再次切换，放弃本次收敛
+        const def = curProvider === "kling" ? getKlingImageDefaultModel() : "";
+        return {
+          image: {
+            ...p,
+            model: convergeModel(p.model, curProviderModels, def),
+            ratio: current.ratios.includes(p.ratio)
+              ? p.ratio
+              : current.defaultRatio || current.ratios[0] || "",
+            resolution: current.resolutions.includes(p.resolution)
+              ? p.resolution
+              : current.defaultResolution || current.resolutions[0] || "",
+            count: current.counts.includes(p.count)
+              ? p.count
+              : current.counts[0] || "1",
+          },
+        };
+      }
+      const p = prev.video;
+      if (p.provider !== curProvider) return {};
+      const def = curProvider === "kling" ? getKlingDefaultModel() : "";
+      return {
+        video: {
+          ...p,
+          model: convergeModel(p.model, curProviderModels, def),
+          ratio: current.ratios.includes(p.ratio)
+            ? p.ratio
+            : current.ratios[0] || "",
+          duration: current.durations.includes(Number(p.duration))
+            ? p.duration
+            : String(current.durations[0] ?? ""),
+          resolution: current.resolutions.includes(p.resolution)
+            ? p.resolution
+            : current.resolutions[0] || "",
+        },
+      };
+    });
+    // current / curProviderModels 引用由 useMemo 保持稳定，仅在清单或 provider 变化时触发
+  }, [current, curProviderModels, curProvider, isImage]);
+
   // ---- 快捷模板（输入 "/" 唤起，自 UXP 版移植）----
   const [tplOpen, setTplOpen] = useState(false);
   const [tplQuery, setTplQuery] = useState("");
@@ -98,74 +210,6 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
   const tplMode = isImage ? "image" : "video";
   const tplFiltered = filterTemplates(tplMode, tplQuery);
 
-  const videoCurrent =
-    videoModels.find((m) => m.modelId === gen.video.model) || videoModels[0];
-  const imageCurrent =
-    imageModels.find((m) => m.modelId === gen.image.model) || imageModels[0];
-
-  // 模型清单到达后选定初始模型
-  useEffect(() => {
-    if (videoModels.length) {
-      const def = getKlingDefaultModel();
-      gen.patchFn((prev) => {
-        const cur = prev.video.model;
-        if (cur && videoModels.some((m) => m.modelId === cur)) return {};
-        return { video: { ...prev.video, model: pickModel(videoModels, def) } };
-      });
-    }
-    if (imageModels.length) {
-      const def = getKlingImageDefaultModel();
-      gen.patchFn((prev) => {
-        const cur = prev.image.model;
-        if (cur && imageModels.some((m) => m.modelId === cur)) return {};
-        return { image: { ...prev.image, model: pickModel(imageModels, def) } };
-      });
-    }
-  }, [videoModels, imageModels]);
-
-  // 换模型后把参数收敛到该模型声明的值域
-  useEffect(() => {
-    if (videoCurrent) {
-      gen.patchFn((prev) => ({
-        video: {
-          ...prev.video,
-          ratio: videoCurrent.ratios.includes(prev.video.ratio)
-            ? prev.video.ratio
-            : videoCurrent.ratios[0] || "",
-          duration: videoCurrent.durations.includes(Number(prev.video.duration))
-            ? prev.video.duration
-            : String(videoCurrent.durations[0] ?? ""),
-          resolution: videoCurrent.resolutions.includes(prev.video.resolution)
-            ? prev.video.resolution
-            : videoCurrent.resolutions[0] || "",
-        },
-      }));
-    }
-  }, [videoCurrent]);
-
-  useEffect(() => {
-    if (imageCurrent) {
-      gen.patchFn((prev) => ({
-        image: {
-          ...prev.image,
-          ratio: imageCurrent.ratios.includes(prev.image.ratio)
-            ? prev.image.ratio
-            : imageCurrent.defaultRatio ||
-              imageCurrent.ratios[0] ||
-              "",
-          resolution: imageCurrent.resolutions.includes(prev.image.resolution)
-            ? prev.image.resolution
-            : imageCurrent.defaultResolution ||
-              imageCurrent.resolutions[0] ||
-              "",
-          count: imageCurrent.counts.includes(prev.image.count)
-            ? prev.image.count
-            : imageCurrent.counts[0] || "1",
-        },
-      }));
-    }
-  }, [imageCurrent]);
-
   /**
    * 智能填画幅比：素材宽高比 → 与当前模型合法 ratio 档匹配最近档（UXP 同款）。
    * 抓帧 / 抓视频两条路径共享；无匹配档或已在当前档时不写。
@@ -173,7 +217,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
   const applySmartRatio = (width: number, height: number) => {
     const actual = ratioStringFromSize(width, height);
     if (!actual) return;
-    const closest = pickClosestRatio(actual, videoCurrent?.ratios);
+    const closest = pickClosestRatio(actual, current?.ratios);
     if (closest && curParams(gen).ratio !== closest) {
       console.log(`[autofill] ratio=${closest} (from ${width}x${height})`);
       gen.patchParams({ ratio: closest });
@@ -185,7 +229,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
    * 超过最大档时取最大档并提示，但不阻止流程（UXP 同款）。
    */
   const fillDuration = (sec: number) => {
-    const ds = [...(videoCurrent?.durations ?? [])].sort((a, b) => a - b);
+    const ds = [...(current?.durations ?? [])].sort((a, b) => a - b);
     if (!ds.length) return;
     const maxD = ds[ds.length - 1];
     if (sec > maxD) {
@@ -366,9 +410,20 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
     setBusy(true);
     hideToast();
     try {
-      const ready = await checkKlingReady();
-      if (!ready.ok) {
-        showToast(ready.message);
+      if (curProvider === "kling") {
+        const ready = await checkKlingReady();
+        if (!ready.ok) {
+          showToast(ready.message);
+          return;
+        }
+      } else if (!getApiKey(curProvider) && !isDryRun()) {
+        // HTTP provider：没配 Key 且没开 dry-run 就别白提交
+        const label =
+          providerOptions.find((o) => o.id === curProvider)?.label ||
+          curProvider;
+        showToast(
+          `未配置 ${label} 的 API Key，请到设置面板配置；或开启 dry-run 验证请求构造`,
+        );
         return;
       }
       if (!gen.prompt.trim()) {
@@ -403,6 +458,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
             })),
           },
           {
+            providerId: curProvider,
             references: imageRefs.map((r) => ({
               type: r.type,
               localPath: r.localPath,
@@ -432,6 +488,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
           })),
         },
         {
+          providerId: curProvider,
           references: gen.refs.map((r) => ({
             type: r.type,
             localPath: r.localPath,
@@ -451,9 +508,6 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
   };
 
   const p = curParams(gen);
-  const current = isImage ? imageCurrent : videoCurrent;
-  // 模型下拉的选项（两种模式的描述符字段不同，取公共部分渲染）
-  const modelOptions = isImage ? imageModels : videoModels;
   const modelLabel =
     current?.displayName ||
     current?.modelId ||
@@ -470,6 +524,14 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
     setModelOpen(false);
     setParamOpen(false);
     hideToast();
+  };
+
+  /** 切 provider：清空模型与参数（收敛 effect 会按新 provider 的值域重选默认档） */
+  const switchProvider = (pid: string) => {
+    if (pid === curProvider) return;
+    gen.patchParams({ provider: pid, model: "" });
+    setModelOpen(false);
+    setParamOpen(false);
   };
 
   return (
@@ -643,8 +705,22 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
         )}
       </div>
 
-      {/* 参数行：模型 + 参数 + 生成 */}
+      {/* 参数行：provider + 模型 + 参数 + 生成 */}
       <div className="param-row">
+        <select
+          className="provider-select"
+          value={curProvider}
+          disabled={busy}
+          onChange={(e) => switchProvider(e.target.value)}
+          title="生成服务：可灵走 CLI（无需 Key）；其余走 HTTP API（需在设置里配 Key）"
+        >
+          {providerOptions.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.label}
+            </option>
+          ))}
+        </select>
+
         <div className="param-anchor">
           <button
             className="param-toggle model-btn"
@@ -665,7 +741,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
               className="param-popover model-popover"
               onClick={(e) => e.stopPropagation()}
             >
-              {modelOptions.map((m) => (
+              {curProviderModels.map((m) => (
                 <label
                   key={m.modelId}
                   className={`radio-item${p.model === m.modelId ? " active" : ""}`}
@@ -726,12 +802,12 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
                 </div>
               </div>
 
-              {isImage && imageCurrent ? (
+              {isImage ? (
                 <>
                   <div className="popover-group">
                     <div className="group-label">分辨率</div>
                     <div className="radio-row">
-                      {imageCurrent.resolutions.map((r) => (
+                      {current.resolutions.map((r) => (
                         <label
                           key={r}
                           className={`radio-item${p.resolution === r ? " active" : ""}`}
@@ -747,69 +823,69 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
                       ))}
                     </div>
                   </div>
+                  {current.counts.length > 0 && (
+                    <div className="popover-group">
+                      <div className="group-label">张数</div>
+                      <div className="radio-row">
+                        {current.counts.map((c) => (
+                          <label
+                            key={c}
+                            className={`radio-item${p.count === c ? " active" : ""}`}
+                          >
+                            <input
+                              type="radio"
+                              name="image-count"
+                              checked={p.count === c}
+                              onChange={() => gen.patchParams({ count: c })}
+                            />
+                            <span>{c}</span>
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <>
                   <div className="popover-group">
-                    <div className="group-label">张数</div>
+                    <div className="group-label">时长</div>
                     <div className="radio-row">
-                      {imageCurrent.counts.map((c) => (
+                      {current.durations.map((d) => (
                         <label
-                          key={c}
-                          className={`radio-item${p.count === c ? " active" : ""}`}
+                          key={d}
+                          className={`radio-item${p.duration === String(d) ? " active" : ""}`}
                         >
                           <input
                             type="radio"
-                            name="image-count"
-                            checked={p.count === c}
-                            onChange={() => gen.patchParams({ count: c })}
+                            name="duration"
+                            checked={p.duration === String(d)}
+                            onChange={() => gen.patchParams({ duration: String(d) })}
                           />
-                          <span>{c}</span>
+                          <span>{d}s</span>
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="popover-group">
+                    <div className="group-label">分辨率</div>
+                    <div className="radio-row">
+                      {current.resolutions.map((r) => (
+                        <label
+                          key={r}
+                          className={`radio-item${p.resolution === r ? " active" : ""}`}
+                        >
+                          <input
+                            type="radio"
+                            name="resolution"
+                            checked={p.resolution === r}
+                            onChange={() => gen.patchParams({ resolution: r })}
+                          />
+                          <span>{r}</span>
                         </label>
                       ))}
                     </div>
                   </div>
                 </>
-              ) : (
-                videoCurrent && (
-                  <>
-                    <div className="popover-group">
-                      <div className="group-label">时长</div>
-                      <div className="radio-row">
-                        {videoCurrent.durations.map((d) => (
-                          <label
-                            key={d}
-                            className={`radio-item${p.duration === String(d) ? " active" : ""}`}
-                          >
-                            <input
-                              type="radio"
-                              name="duration"
-                              checked={p.duration === String(d)}
-                              onChange={() => gen.patchParams({ duration: String(d) })}
-                            />
-                            <span>{d}s</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="popover-group">
-                      <div className="group-label">分辨率</div>
-                      <div className="radio-row">
-                        {videoCurrent.resolutions.map((r) => (
-                          <label
-                            key={r}
-                            className={`radio-item${p.resolution === r ? " active" : ""}`}
-                          >
-                            <input
-                              type="radio"
-                              name="resolution"
-                              checked={p.resolution === r}
-                              onChange={() => gen.patchParams({ resolution: r })}
-                            />
-                            <span>{r}</span>
-                          </label>
-                        ))}
-                      </div>
-                    </div>
-                  </>
-                )
               )}
             </div>
           )}
@@ -831,9 +907,14 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
           {toast.text}
         </div>
       )}
-      {!env.ready && env.reason && (
+      {curProvider === "kling" && !env.ready && env.reason && (
         <div className="form-message hint">
           可灵环境未就绪（{env.message}）—— 点右上角 ⚙ 处理。
+        </div>
+      )}
+      {curProvider !== "kling" && isDryRun() && (
+        <div className="form-message hint">
+          dry-run 已开启：提交会被拦截，仅验证请求构造，不产生真实结果。
         </div>
       )}
       {gen.refs.length > 0 && current && !current.imageInput && (
@@ -859,6 +940,29 @@ interface CurParams {
   count: string;
 }
 
+/** 统一模型视图：kling 清单与 provider 清单归一后的形状（UI 只消费它） */
+interface UiModel {
+  modelId: string;
+  displayName: string;
+  ratios: string[];
+  /** 视频侧时长档（秒）；图片侧恒为空 */
+  durations: number[];
+  resolutions: string[];
+  /** 图片侧张数档；视频侧恒为空 */
+  counts: string[];
+  defaultResolution?: string;
+  defaultRatio?: string;
+  /** 是否支持参考素材（图 / 视频 / 音频任一） */
+  imageInput: boolean;
+}
+
+/** 模型收敛：已在清单里就保留；否则优先服务端默认，再退首项 */
+function convergeModel(cur: string, models: UiModel[], def: string): string {
+  if (cur && models.some((m) => m.modelId === cur)) return cur;
+  if (def && models.some((m) => m.modelId === def)) return def;
+  return models[0]?.modelId || "";
+}
+
 /** 取当前模式的参数桶（缺失的字段补空串，调用方不用判空） */
 function curParams(state: {
   mode: GenMode;
@@ -868,15 +972,6 @@ function curParams(state: {
   return state.mode === "image"
     ? { ...state.image, duration: "" }
     : { ...state.video, count: "" };
-}
-
-/** 选模型：优先用服务端默认模型，清单里没有就取首项 */
-function pickModel(
-  models: { modelId: string }[],
-  def: string,
-): string {
-  if (def && models.some((m) => m.modelId === def)) return def;
-  return models[0]?.modelId || "";
 }
 
 // ---- 自动填画幅比的工具（自 UXP 版 useReferences.ts 移植） ----

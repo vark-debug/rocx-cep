@@ -56,3 +56,22 @@ export { invalidateKlingUpload } from "./kling/preUpload";
 
 export { registerMedia } from "./storage/mediaServer";
 export { readImageDataUrl } from "./storage/image";
+
+// ---------- HTTP provider（minimax / runninghub / ark） ----------
+
+export {
+  ensureProvidersRegistered,
+  videoProviderOptions,
+  imageProviderOptions,
+  listModels as listProviderModels,
+  listImageModels as listProviderImageModels,
+  isDryRun,
+  setDryRun,
+} from "./providers";
+export type { ProviderOption, ProviderModelDescriptor } from "./providers";
+
+export {
+  getApiKey,
+  setApiKey,
+  listConfiguredProviders,
+} from "./storage/apiKeys";

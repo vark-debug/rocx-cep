@@ -1,21 +1,43 @@
 import { useState, useSyncExternalStore } from "react";
 import {
+  getApiKey,
   getKlingEnv,
   getKlingModels,
   getSequenceInfoSnapshot,
+  imageProviderOptions,
   installKlingCli,
+  isDryRun,
+  listConfiguredProviders,
   logoutKling,
   refreshKlingEnvInBackground,
+  setApiKey,
+  setDryRun,
   startKlingLogin,
   subscribeGeneration,
   subscribeKlingState,
+  videoProviderOptions,
 } from "../../core/api";
+
+/**
+ * 需要 API Key 的 provider（video ∪ image 选项里去掉 kling）。
+ * kling 走 CLI 登录，无 Key 概念，不进这张表。
+ */
+const API_KEY_PROVIDERS = (() => {
+  const seen = new Map<string, string>();
+  for (const o of [...videoProviderOptions(), ...imageProviderOptions()]) {
+    if (o.id !== "kling") seen.set(o.id, o.label);
+  }
+  return [...seen].map(([id, label]) => ({ id, label }));
+})();
 
 /**
  * 设置面板（齿轮打开）
  *
  * 覆盖三种「提交了也白搭」的情况：CLI 没装、没登录、余额不足。
  * 之前这些常驻在面板顶部，占掉一行宝贵高度；现在收进抽屉。
+ *
+ * 另含 HTTP provider 的 API Key 管理（per-provider 存插件数据目录）
+ * 与 dry-run 开关（无 Key 验证请求构造，对齐 UXP 版 __ROCX_DRY_RUN__）。
  */
 export const SettingsPanel = () => {
   const env = useSyncExternalStore(subscribeKlingState, getKlingEnv);
@@ -24,6 +46,24 @@ export const SettingsPanel = () => {
   const [busy, setBusy] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [region, setRegion] = useState<"cn" | "global">("cn");
+
+  // ---- API Key 管理（per-provider，存插件数据目录 api-keys.json）----
+  const [keyDrafts, setKeyDrafts] = useState<Record<string, string>>(() =>
+    Object.fromEntries(API_KEY_PROVIDERS.map((p) => [p.id, getApiKey(p.id)])),
+  );
+  const [configured, setConfigured] = useState<string[]>(() =>
+    listConfiguredProviders(),
+  );
+  const [keyMsg, setKeyMsg] = useState("");
+  // ---- dry-run 开关（面板重载后回到默认关，与 Node 层语义一致）----
+  const [dryRun, setDryRunState] = useState(() => isDryRun());
+
+  const saveKey = (id: string) => {
+    const v = (keyDrafts[id] || "").trim();
+    setApiKey(id, v);
+    setConfigured(listConfiguredProviders());
+    setKeyMsg(v ? `${id} API Key 已保存` : `${id} API Key 已清除`);
+  };
 
   const cliMissing = env.reason === "cli_not_installed";
   const notLoggedIn = env.reason === "not_logged_in";
@@ -164,6 +204,50 @@ export const SettingsPanel = () => {
         {env.checkedAt && !checking
           ? ` · 上次检测 ${new Date(env.checkedAt).toLocaleString()}`
           : ""}
+      </div>
+
+      {/* HTTP provider 的 API Key 管理 */}
+      <div className="apikey-section">
+        <div className="apikey-title">API 服务（HTTP 直连）</div>
+        {API_KEY_PROVIDERS.map((p) => (
+          <div className="apikey-row" key={p.id}>
+            <span className="apikey-label">{p.label}</span>
+            <input
+              className="apikey-input"
+              type="password"
+              placeholder="粘贴 API Key"
+              value={keyDrafts[p.id] ?? ""}
+              onChange={(e) =>
+                setKeyDrafts((prev) => ({ ...prev, [p.id]: e.target.value }))
+              }
+              autoComplete="off"
+            />
+            <button
+              className="apikey-save"
+              type="button"
+              onClick={() => saveKey(p.id)}
+            >
+              保存
+            </button>
+            <span
+              className={`apikey-status${configured.includes(p.id) ? " ok" : ""}`}
+            >
+              {configured.includes(p.id) ? "已配置" : "未配置"}
+            </span>
+          </div>
+        ))}
+        <label className="dryrun-toggle" title="开启后提交被拦截：只构造并打印请求，不发生真实调用（无 Key 也能验证全链）">
+          <input
+            type="checkbox"
+            checked={dryRun}
+            onChange={(e) => {
+              setDryRun(e.target.checked);
+              setDryRunState(e.target.checked);
+            }}
+          />
+          dry-run 模式（拦截提交，仅验证请求构造）
+        </label>
+        {keyMsg && <div className="apikey-msg">{keyMsg}</div>}
       </div>
 
       {log.length > 0 && (

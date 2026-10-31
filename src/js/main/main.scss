@@ -209,6 +209,96 @@ button {
   word-break: break-all;
 }
 
+/* API 服务（HTTP provider 的 Key 管理 + dry-run 开关） */
+.apikey-section {
+  margin-top: 10px;
+  padding-top: 8px;
+  border-top: 1px solid var(--rp-border, #454545);
+}
+
+.apikey-title {
+  font-size: 11px;
+  opacity: 0.7;
+  margin-bottom: 6px;
+}
+
+.apikey-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.apikey-label {
+  flex-shrink: 0;
+  width: 84px;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.apikey-input {
+  flex: 1;
+  min-width: 0;
+  padding: 3px 6px;
+  font-size: 11px;
+  background: var(--rp-bg, #2b2b2b);
+  color: inherit;
+  border: 1px solid var(--rp-border, #454545);
+  border-radius: 3px;
+
+  &:focus {
+    outline: none;
+    border-color: var(--rp-accent, #4b9cf5);
+  }
+}
+
+.apikey-save {
+  flex-shrink: 0;
+  padding: 3px 8px;
+  font-size: 11px;
+  background: var(--rp-hover, #3d3d3d);
+  color: inherit;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+
+  &:hover {
+    filter: brightness(1.2);
+  }
+}
+
+.apikey-status {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: #f6d55c;
+
+  &.ok {
+    color: #3caea3;
+  }
+}
+
+.dryrun-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: 11px;
+  cursor: pointer;
+
+  input {
+    margin: 0;
+    accent-color: var(--rp-accent, #4b9cf5);
+  }
+}
+
+.apikey-msg {
+  margin-top: 4px;
+  font-size: 10px;
+  color: #3caea3;
+}
+
 /* ---------- 记录区：左缩略图 + 右信息流 ---------- */
 
 /* 浮动 prompt bar 占位：两列底部留白共用，避免最后一条被浮栏压住 */
@@ -919,6 +1009,24 @@ button {
   &:hover:not(:disabled) {
     background: var(--rp-hover, #3d3d3d);
   }
+
+  &:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+}
+
+/* provider 选择器（可灵 / MiniMax / …） */
+.provider-select {
+  flex-shrink: 0;
+  max-width: 92px;
+  padding: 4px 4px;
+  font-size: 11px;
+  background: var(--rp-surface, #383838);
+  color: inherit;
+  border: 1px solid var(--rp-border, #454545);
+  border-radius: 4px;
+  cursor: pointer;
 
   &:disabled {
     opacity: 0.5;
