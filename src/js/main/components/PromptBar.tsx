@@ -92,6 +92,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
   );
   const [modelOpen, setModelOpen] = useState(false);
   const [paramOpen, setParamOpen] = useState(false);
+  const [providerOpen, setProviderOpen] = useState(false);
   const promptRef = useRef<HTMLTextAreaElement | null>(null);
 
   const isImage = gen.mode === "image";
@@ -523,6 +524,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
     gen.patch({ mode, refs: [] });
     setModelOpen(false);
     setParamOpen(false);
+    setProviderOpen(false);
     hideToast();
   };
 
@@ -530,6 +532,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
   const switchProvider = (pid: string) => {
     if (pid === curProvider) return;
     gen.patchParams({ provider: pid, model: "" });
+    setProviderOpen(false);
     setModelOpen(false);
     setParamOpen(false);
   };
@@ -707,19 +710,54 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
 
       {/* 参数行：provider + 模型 + 参数 + 生成 */}
       <div className="param-row">
-        <select
-          className="provider-select"
-          value={curProvider}
-          disabled={busy}
-          onChange={(e) => switchProvider(e.target.value)}
-          title="生成服务：可灵走 CLI（无需 Key）；其余走 HTTP API（需在设置里配 Key）"
-        >
-          {providerOptions.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.label}
-            </option>
-          ))}
-        </select>
+        <div className="param-anchor">
+          {(() => {
+            const curLabel =
+              providerOptions.find((o) => o.id === curProvider)?.label ||
+              curProvider;
+            return (
+              <>
+                <button
+                  className="param-toggle provider-btn"
+                  type="button"
+                  disabled={busy}
+                  onClick={() => {
+                    setProviderOpen((v) => !v);
+                    setModelOpen(false);
+                    setParamOpen(false);
+                  }}
+                  title={`生成服务：${curLabel}（可灵走 CLI 无需 Key；其余走 HTTP API，需在设置里配 Key）`}
+                >
+                  {curLabel}
+                </button>
+
+                {/* provider 浮层：CEP webview 原生 <select> 弹不出来，走自定义浮层（同模型选择） */}
+                {providerOpen && (
+                  <div
+                    className="param-popover provider-popover"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    {providerOptions.map((o) => (
+                      <label
+                        key={o.id}
+                        className={`radio-item${curProvider === o.id ? " active" : ""}`}
+                      >
+                        <input
+                          type="radio"
+                          name="provider"
+                          value={o.id}
+                          checked={curProvider === o.id}
+                          onChange={() => switchProvider(o.id)}
+                        />
+                        <span>{o.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </>
+            );
+          })()}
+        </div>
 
         <div className="param-anchor">
           <button
@@ -729,6 +767,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
             onClick={() => {
               setModelOpen((v) => !v);
               setParamOpen(false);
+              setProviderOpen(false);
             }}
             title={`当前模型：${modelLabel}`}
           >
@@ -771,6 +810,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
             onClick={() => {
               setParamOpen((v) => !v);
               setModelOpen(false);
+              setProviderOpen(false);
             }}
           >
             {paramsSummary || "参数"}

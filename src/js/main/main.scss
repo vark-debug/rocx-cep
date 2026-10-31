@@ -1016,22 +1016,14 @@ button {
   }
 }
 
-/* provider 选择器（可灵 / MiniMax / …） */
-.provider-select {
+/* provider 按钮（可灵 / MiniMax / …）：CEP 原生 select 弹不出，走自定义浮层 */
+.provider-btn {
+  max-width: 96px;
   flex-shrink: 0;
-  max-width: 92px;
-  padding: 4px 4px;
-  font-size: 11px;
-  background: var(--rp-surface, #383838);
-  color: inherit;
-  border: 1px solid var(--rp-border, #454545);
-  border-radius: 4px;
-  cursor: pointer;
+}
 
-  &:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
-  }
+.provider-popover {
+  min-width: 150px;
 }
 
 .submit-btn {
