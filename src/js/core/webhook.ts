@@ -101,7 +101,25 @@ function resolveProjectName(projectPath?: string): string {
   return seg || "";
 }
 
-/** 上报 payload（8 字段，与 UXP 版 / 飞书表格列一一对应） */
+/**
+ * 生成时长（秒，一位小数）：
+ * - 视频生视频（有参考视频素材）= 各素材时长之和 + 结果时长
+ * - 文生视频 / 图生视频 = 结果时长
+ * - 图片 = 0
+ *
+ * 素材时长在抓视频时已知（exportAsMediaDirect 返回入出点时长）并随记录落盘；
+ * 外部素材（URL 直传）拿不到时长，缺省不计。
+ */
+export function resolveGenerationSeconds(record: GenerationRecord): number {
+  const result =
+    record.kind === "image" ? 0 : record.params?.duration || 0;
+  const refDuration = (record.references || [])
+    .filter((r) => r.type === "reference_video")
+    .reduce((sum, r) => sum + (r.durationSeconds || 0), 0);
+  return Math.round((refDuration + result) * 10) / 10;
+}
+
+/** 上报 payload（9 字段，与飞书表格列一一对应） */
 export interface ReportPayload {
   recordId: string;
   /** 非 CNY 单位恒为 0（CEP 版当前只有可灵，走灵感值列） */
@@ -114,6 +132,8 @@ export interface ReportPayload {
   editorName: string;
   projectName: string;
   purpose: string;
+  /** 生成时长（秒）：视频生视频 = 素材时长 + 结果时长；其余 = 结果时长；图片 = 0 */
+  generationSeconds: number;
 }
 
 export function buildReportPayload(
@@ -130,6 +150,7 @@ export function buildReportPayload(
     editorName,
     projectName: resolveProjectName(record.projectPath),
     purpose: resolvePurpose(record),
+    generationSeconds: resolveGenerationSeconds(record),
   };
 }
 
@@ -267,7 +288,9 @@ const SAMPLE_PAYLOAD: ReportPayload = {
   status: "submitted",
   editorName: "",
   projectName: "Nike_春季广告片_剪辑版",
-  purpose: "kling_text_to_video",
+  purpose: "kling_image_to_video",
+  // 图生视频样例：素材 12s + 生成 5s
+  generationSeconds: 17,
 };
 
 /**

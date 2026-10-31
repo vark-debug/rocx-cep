@@ -15,6 +15,7 @@ import {
   startKlingLogin,
   subscribeGeneration,
   subscribeKlingState,
+  testWebhookReport,
   videoProviderOptions,
 } from "../../core/api";
 
@@ -57,12 +58,35 @@ export const SettingsPanel = () => {
   const [keyMsg, setKeyMsg] = useState("");
   // ---- dry-run 开关（面板重载后回到默认关，与 Node 层语义一致）----
   const [dryRun, setDryRunState] = useState(() => isDryRun());
+  // ---- Webhook 测试上报 ----
+  const [whTesting, setWhTesting] = useState(false);
+  const [whMsg, setWhMsg] = useState<{ ok: boolean; text: string } | null>(null);
 
   const saveKey = (id: string) => {
     const v = (keyDrafts[id] || "").trim();
     setApiKey(id, v);
     setConfigured(listConfiguredProviders());
     setKeyMsg(v ? `${id} API Key 已保存` : `${id} API Key 已清除`);
+  };
+
+  const runWebhookTest = async () => {
+    setWhTesting(true);
+    setWhMsg(null);
+    try {
+      const res = await testWebhookReport();
+      setWhMsg({
+        ok: res.ok,
+        text: res.skipped
+          ? "未配置 Webhook 地址：编辑 ~/.rocx-cep/config.json"
+          : res.ok
+            ? "测试上报成功，请到接收端（飞书多维表格等）核对数据"
+            : `测试上报失败：${res.error}`,
+      });
+    } catch (e: any) {
+      setWhMsg({ ok: false, text: `测试异常：${String(e?.message || e)}` });
+    } finally {
+      setWhTesting(false);
+    }
   };
 
   const cliMissing = env.reason === "cli_not_installed";
@@ -248,6 +272,27 @@ export const SettingsPanel = () => {
           dry-run 模式（拦截提交，仅验证请求构造）
         </label>
         {keyMsg && <div className="apikey-msg">{keyMsg}</div>}
+      </div>
+
+      {/* Webhook 上报：说明 + 测试上报（原在主面板工具行） */}
+      <div className="apikey-section">
+        <div className="apikey-title">Webhook 生成上报</div>
+        <div className="apikey-hint">
+          提交生成任务后自动上报（fire-and-forget）；地址与令牌在
+          ~/.rocx-cep/config.json 配置
+        </div>
+        <button
+          className="apikey-save webhook-test-btn"
+          type="button"
+          disabled={whTesting}
+          onClick={() => void runWebhookTest()}
+          title="用固定样例打一次 Webhook，验证地址 / 令牌 / 表格字段映射"
+        >
+          {whTesting ? "测试中…" : "⚡ 测试上报"}
+        </button>
+        {whMsg && (
+          <div className={`apikey-msg${whMsg.ok ? "" : " err"}`}>{whMsg.text}</div>
+        )}
       </div>
 
       {log.length > 0 && (

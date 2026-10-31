@@ -22,7 +22,6 @@ import {
   submitImageGeneration,
   subscribeGeneration,
   subscribeKlingState,
-  testWebhookReport,
   videoProviderOptions,
   warmUpReference,
 } from "../../core/api";
@@ -313,6 +312,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
         thumb: "",
         fileName: res.fileName || res.path.split(/[\\/]/).pop() || "参考视频",
         sizeBytes: res.sizeBytes || 0,
+        durationSeconds: res.durationSeconds,
       });
       if (isFirstVideoRef) {
         if (res.durationSeconds && res.durationSeconds > 0) {
@@ -465,6 +465,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
               localPath: r.localPath,
               fileName: r.fileName,
               sizeBytes: r.sizeBytes,
+              durationSeconds: r.durationSeconds,
             })),
           },
         );
@@ -495,6 +496,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
             localPath: r.localPath,
             fileName: r.fileName,
             sizeBytes: r.sizeBytes,
+            durationSeconds: r.durationSeconds,
           })),
         },
       );
@@ -596,30 +598,6 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
               🎞 抓视频
             </button>
           )}
-          <button
-            className="capture-btn"
-            type="button"
-            disabled={busy}
-            onClick={async () => {
-              setBusy(true);
-              hideToast();
-              try {
-                const res = await testWebhookReport();
-                showToast(
-                  res.skipped
-                    ? "未配置 Webhook：编辑 ~/.rocx-cep/config.json"
-                    : res.ok
-                      ? "测试上报成功，检查接收端数据"
-                      : `测试上报失败：${res.error}`,
-                );
-              } finally {
-                setBusy(false);
-              }
-            }}
-            title="用固定样例打一次 Webhook（飞书多维表格），验证地址与令牌；地址在 ~/.rocx-cep/config.json 配置"
-          >
-            ⚡ 测试上报
-          </button>
         </div>
       </div>
 

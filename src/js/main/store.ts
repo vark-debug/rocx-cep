@@ -22,6 +22,8 @@ export interface GenRef {
   fileName: string;
   /** 文件大小（字节） */
   sizeBytes: number;
+  /** 参考视频时长（秒；抓视频时已知，webhook 生成时长用） */
+  durationSeconds?: number;
   /** 正在 Photoshop 中编辑（抓帧→PS 流程；点「修改完成」后清除） */
   editingInPs?: boolean;
 }
@@ -165,6 +167,7 @@ export function useGenStore(): GenStore {
         thumb: thumbOf ? thumbOf(r.localPath) : "",
         fileName: r.fileName,
         sizeBytes: r.sizeBytes,
+        durationSeconds: r.durationSeconds,
       }));
       setState((prev) =>
         isImage

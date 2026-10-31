@@ -389,6 +389,14 @@ export interface GenerationReference {
   fileName: string;
   /** 文件大小（字节） */
   sizeBytes: number;
+  /**
+   * 参考视频时长（秒，一位小数）。
+   *
+   * 抓视频素材时已知（exportAsMediaDirect 返回入出点时长）；
+   * webhook 上报「生成时长」时：视频生视频 = 素材时长 + 结果时长。
+   * 外部素材（URL 直传）拿不到时长，缺省 —— 上报只计结果时长。
+   */
+  durationSeconds?: number;
   /** 缩略图（data URL，写盘时剥离） */
   thumbDataUrl?: string;
 }
