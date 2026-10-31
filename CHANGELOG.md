@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.0 (2026-10-31)
+
+一步到位安装包 + 生成上报。
+
+- **安装包（推荐方式）**：mac 双击 pkg（Apple Silicon / Intel 双架构）、Windows 双击 exe（Inno Setup，per-user 免管理员）。
+  内嵌官方 node LTS + 可灵 CLI runtime，装完即用 —— 无需系统 node/npm、无需 `npm i -g`。
+  安装脚本自动开启 PlayerDebugMode（实测 CSXS 只读用户域：postinstall 以各用户身份写入；
+  Windows 写 HKCU）
+- **CLI 来源感知**：面板区分「已内置 / 已安装」；内嵌 runtime 被删或损坏时自动回落系统 node + npm 全局 CLI
+- **webhook 生成上报**：任务提交成功后向自配 webhook 推送记录（fire-and-forget），
+  `purpose` 精确到具体工具（`kling_text_to_video` / `kling_image_to_image` / `kling_omni_ref_video` 等 `{provider}_{tool}` 格式）；
+  飞书限流自动重试（400/800/1600ms ± 抖动）；面板提供「测试上报」按钮
+- 安装方式三选一：安装包（推荐）/ zip 文件夹 / zxp
+
 ## 0.1.1 (2026-10-31)
 
 Windows / Premiere Pro 2021 兼容性（实测 Win 10 + PR 2021、macOS + PR 2026）。
