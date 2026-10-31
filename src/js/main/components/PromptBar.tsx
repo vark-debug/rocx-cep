@@ -17,6 +17,7 @@ import {
   submitImageGeneration,
   subscribeGeneration,
   subscribeKlingState,
+  testWebhookReport,
   warmUpReference,
 } from "../../core/api";
 import type { GenMode, GenStore } from "../store";
@@ -530,6 +531,30 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
               🎞 抓视频
             </button>
           )}
+          <button
+            className="capture-btn"
+            type="button"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              hideToast();
+              try {
+                const res = await testWebhookReport();
+                showToast(
+                  res.skipped
+                    ? "未配置 Webhook：编辑 ~/.rocx-cep/config.json"
+                    : res.ok
+                      ? "测试上报成功，检查接收端数据"
+                      : `测试上报失败：${res.error}`,
+                );
+              } finally {
+                setBusy(false);
+              }
+            }}
+            title="用固定样例打一次 Webhook（飞书多维表格），验证地址与令牌；地址在 ~/.rocx-cep/config.json 配置"
+          >
+            ⚡ 测试上报
+          </button>
         </div>
       </div>
 

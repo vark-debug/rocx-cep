@@ -76,6 +76,36 @@ kling login
 
 重启 Premiere Pro，菜单 **窗口 → 扩展 → RocX** 打开面板。
 
+## Webhook 上报（可选）
+
+每次生成任务**提交成功**后，把一条记录推送到外部平台（飞书多维表格自动化 / 钉钉等）。fire-and-forget：失败不影响生成。
+
+配置文件 `~/.rocx-cep/config.json`（地址与令牌不经过面板，不落生成记录）：
+
+```json
+{
+  "feishuWebhookUrl": "https://automation.feishu.cn/...",
+  "feishuToken": "可选，Bearer 凭证（强烈建议开启：飞书单流程无凭证限 1 次/秒）",
+  "editorName": "张三"
+}
+```
+
+payload 字段与飞书表格列一一对应：
+
+| 字段 | 说明 |
+| --- | --- |
+| `recordId` | 生成记录 id |
+| `creditsConsumed` | 可灵真实扣费灵感值（提交即扣） |
+| `costUnit` | 恒为 `CREDITS` |
+| `estimateCost` | 恒为 0（预留人民币口径） |
+| `status` | 恒为 `submitted`（提交即上报） |
+| `editorName` / `projectName` | 配置的剪辑师名 / PR 工程文件名 |
+| `purpose` | `{provider}_{tool}`，见下 |
+
+`purpose` 取值随生成方式自动变化：`kling_text_to_video`、`kling_image_to_video`、`kling_omni_ref_video`（视频参考生成）、`kling_text_to_image`、`kling_image_to_image`。后续接入新 provider 时按同样规则生成（如 `xxx_text_to_image`）。
+
+面板「⚡ 测试上报」按钮会用固定样例打一次 webhook，用于验证地址 / 令牌 / 表格字段映射。
+
 ## 开发
 
 ```bash
