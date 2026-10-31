@@ -85,6 +85,7 @@ src/js/    Node 层 + Panel（React 19 + Vite；Node 层走 fs/子进程，禁�
 - v0.1.0 仅支持可灵（Kling）作为生成后端
 - 抓视频依赖 `exportAsMediaDirect`，片段越长导出等待越久（PR 界面显示进度条）
 - 自定义提示词模板的存储与设置页管理暂未实现（仅内置 5 条）
+- 兼容性：实测 PR 2026（macOS）；理论下限 PR 2021（15.4，抓视频的 workArea 参数），旧版本未实测
 
 ## License
 
