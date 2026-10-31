@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.1.1 (2026-10-31)
+
+Windows / Premiere Pro 2021 兼容性（实测 Win 10 + PR 2021、macOS + PR 2026）。
+
+- **host 层加载**：PR 2021（15.2）Windows 下 `$.evalFile` 报 "Cannot convert" 导致面板
+  永远加载不上 —— 改为 Node 读入 jsx 文件内容后整体 `evalScript` 执行，
+  并在失败时透出行号（PR 2026 新脚本引擎不受影响）
+- **spawn ENOMEM 对策**：CEP 内嵌 Node（旧 libuv）在 Windows 上创建子进程时对继承的
+  环境块敏感（`=C:` 隐藏变量 / 环境块超长均被映射为 UV_ENOMEM）——
+  spawn 前净化环境块；仍失败则用最小安全环境自动重试一次
+- **npm 全局探测**：补齐 Windows 下降级安装（`--prefix ~/.npm-global`）的布局探测；
+  修复 `npm err!` 前缀被误判为权限错误导致的无意义降级；
+  安装验证失败时透出首次安装的真实错误输出
+- **构建脚本**：`check:es3` 用 `fileURLToPath` 修复 Windows 下 `/C:/` 双盘符路径
+
 ## 0.1.0 (2026-10-31)
 
 首个 CEP 版本（自 RocX UXP 版移植）。
