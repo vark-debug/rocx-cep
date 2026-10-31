@@ -13,6 +13,7 @@ import { getSequenceInfo, importFiles } from "./ppro";
 import { downloadToFile, guessFileName } from "./storage/download";
 import { probePrimary, readRecords, writeRecords } from "./storage/records";
 import { ensureWorkDir, uniqueFilePath, IMPORTS_SUBDIR } from "./storage/workDir";
+import { reportGenerated } from "./webhook";
 import type {
   GenerationRecord,
   GenerationRecordStatus,
@@ -371,6 +372,8 @@ export async function submitGeneration(
       submittedAt: nowIso(),
     });
     trackPoll(record.id, submitted.taskId, submitted.traceId, "video");
+    // 提交即上报（fire-and-forget；可灵提交即扣费，status=submitted）
+    void reportGenerated(findRecord(record.id) ?? record);
   } catch (e) {
     const err = e as KlingProviderError;
     updateRecord(record.id, {
@@ -439,6 +442,8 @@ export async function submitImageGeneration(
       submittedAt: nowIso(),
     });
     trackPoll(record.id, submitted.taskId, submitted.traceId, "image");
+    // 提交即上报（fire-and-forget；可灵提交即扣费，status=submitted）
+    void reportGenerated(findRecord(record.id) ?? record);
   } catch (e) {
     const err = e as KlingProviderError;
     updateRecord(record.id, {

@@ -48,6 +48,7 @@ export type {
 
 export { captureClip, captureFrame, warmUpReference } from "./capture";
 export type { CaptureFrameResult } from "./capture";
+export { testReport as testWebhookReport } from "./webhook";
 
 export { openInPhotoshop } from "./ps";
 export type { OpenPsResult } from "./ps";
