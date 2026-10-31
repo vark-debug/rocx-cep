@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 需要 zxpsigncmd 的 darwin 二进制生成 zxp（linux 无签名工具）
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
