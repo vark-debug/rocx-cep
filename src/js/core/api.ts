@@ -99,3 +99,11 @@ export {
   setApiKey,
   listConfiguredProviders,
 } from "./storage/apiKeys";
+
+// ---------- webhook ----------
+
+export {
+  getWebhookConfig,
+  saveWebhookConfig,
+} from "./webhook";
+export type { WebhookConfig } from "./webhook";

@@ -4,12 +4,14 @@ import {
   getKlingEnv,
   getKlingModels,
   getSequenceInfoSnapshot,
+  getWebhookConfig,
   imageProviderOptions,
   installKlingCli,
   isDryRun,
   listConfiguredProviders,
   logoutKling,
   refreshKlingEnvInBackground,
+  saveWebhookConfig,
   setApiKey,
   setDryRun,
   startKlingLogin,
@@ -58,9 +60,26 @@ export const SettingsPanel = () => {
   const [keyMsg, setKeyMsg] = useState("");
   // ---- dry-run 开关（面板重载后回到默认关，与 Node 层语义一致）----
   const [dryRun, setDryRunState] = useState(() => isDryRun());
-  // ---- Webhook 测试上报 ----
+  // ---- Webhook 配置 + 测试上报 ----
+  const [whForm, setWhForm] = useState(() => getWebhookConfig());
+  const [whSaving, setWhSaving] = useState(false);
+  const [whSaved, setWhSaved] = useState(false);
   const [whTesting, setWhTesting] = useState(false);
   const [whMsg, setWhMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const saveWebhook = () => {
+    setWhSaving(true);
+    setWhMsg(null);
+    try {
+      setWhForm(saveWebhookConfig(whForm));
+      setWhSaved(true);
+      window.setTimeout(() => setWhSaved(false), 2000);
+    } catch (e: any) {
+      setWhMsg({ ok: false, text: `配置保存失败：${String(e?.message || e)}` });
+    } finally {
+      setWhSaving(false);
+    }
+  };
 
   const saveKey = (id: string) => {
     const v = (keyDrafts[id] || "").trim();
@@ -274,22 +293,71 @@ export const SettingsPanel = () => {
         {keyMsg && <div className="apikey-msg">{keyMsg}</div>}
       </div>
 
-      {/* Webhook 上报：说明 + 测试上报（原在主面板工具行） */}
+      {/* Webhook 上报：配置（地址/令牌/剪辑师）+ 测试上报 */}
       <div className="apikey-section">
         <div className="apikey-title">Webhook 生成上报</div>
         <div className="apikey-hint">
-          提交生成任务后自动上报（fire-and-forget）；地址与令牌在
-          ~/.rocx-cep/config.json 配置
+          提交生成任务后自动上报（fire-and-forget）；配置存
+          ~/.rocx-cep/config.json（0600）
         </div>
-        <button
-          className="apikey-save webhook-test-btn"
-          type="button"
-          disabled={whTesting}
-          onClick={() => void runWebhookTest()}
-          title="用固定样例打一次 Webhook，验证地址 / 令牌 / 表格字段映射"
-        >
-          {whTesting ? "测试中…" : "⚡ 测试上报"}
-        </button>
+        <div className="apikey-row">
+          <span className="apikey-label">Webhook 地址</span>
+          <input
+            className="apikey-input"
+            type="text"
+            placeholder="飞书多维表格自动化入参地址（http/https）"
+            value={whForm.feishuWebhookUrl}
+            onChange={(e) =>
+              setWhForm((p) => ({ ...p, feishuWebhookUrl: e.target.value }))
+            }
+            autoComplete="off"
+          />
+        </div>
+        <div className="apikey-row">
+          <span className="apikey-label">Bearer 令牌</span>
+          <input
+            className="apikey-input"
+            type="password"
+            placeholder="可选，强烈建议（未开启时限流 1 次/秒）"
+            value={whForm.feishuToken}
+            onChange={(e) =>
+              setWhForm((p) => ({ ...p, feishuToken: e.target.value }))
+            }
+            autoComplete="off"
+          />
+        </div>
+        <div className="apikey-row">
+          <span className="apikey-label">剪辑师名</span>
+          <input
+            className="apikey-input"
+            type="text"
+            placeholder="上报行「剪辑师」列（可选）"
+            value={whForm.editorName}
+            onChange={(e) =>
+              setWhForm((p) => ({ ...p, editorName: e.target.value }))
+            }
+            autoComplete="off"
+          />
+        </div>
+        <div className="webhook-btn-row">
+          <button
+            className="apikey-save webhook-test-btn"
+            type="button"
+            disabled={whSaving}
+            onClick={() => void saveWebhook()}
+          >
+            {whSaving ? "保存中…" : whSaved ? "✓ 已保存" : "保存配置"}
+          </button>
+          <button
+            className="apikey-save webhook-test-btn"
+            type="button"
+            disabled={whTesting}
+            onClick={() => void runWebhookTest()}
+            title="用固定样例打一次 Webhook，验证地址 / 令牌 / 表格字段映射"
+          >
+            {whTesting ? "测试中…" : "⚡ 测试上报"}
+          </button>
+        </div>
         {whMsg && (
           <div className={`apikey-msg${whMsg.ok ? "" : " err"}`}>{whMsg.text}</div>
         )}

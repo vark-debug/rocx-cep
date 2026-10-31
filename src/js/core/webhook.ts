@@ -74,6 +74,44 @@ function readConfig(): WebhookConfig {
   }
 }
 
+/** 设置面板读配置（每次打开面板实时读文件，与上报路径同源） */
+export function getWebhookConfig(): WebhookConfig {
+  return readConfig();
+}
+
+/**
+ * 设置面板保存配置：合并写回（未提到的字段保留原值）。
+ * 写完立刻生效 —— 上报路径每次都重新读文件，无需重启面板。
+ */
+export function saveWebhookConfig(partial: Partial<WebhookConfig>): WebhookConfig {
+  const cur = readConfig();
+  const next: WebhookConfig = {
+    feishuWebhookUrl:
+      typeof partial.feishuWebhookUrl === "string"
+        ? partial.feishuWebhookUrl.trim()
+        : cur.feishuWebhookUrl,
+    feishuToken:
+      typeof partial.feishuToken === "string"
+        ? partial.feishuToken.trim()
+        : cur.feishuToken,
+    editorName:
+      typeof partial.editorName === "string"
+        ? partial.editorName.trim()
+        : cur.editorName,
+  };
+  try {
+    fsMod.mkdirSync(pathMod.dirname(configPath()), { recursive: true });
+    // 0600：里面可能放 Bearer token，只留给当前用户
+    fsMod.writeFileSync(configPath(), JSON.stringify(next, null, 2), {
+      mode: 0o600,
+    });
+  } catch (e) {
+    console.warn("[webhook] 配置写入失败", e);
+    throw e;
+  }
+  return next;
+}
+
 // ---------- payload ----------
 
 /**
