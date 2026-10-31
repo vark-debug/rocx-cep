@@ -46,6 +46,7 @@ import {
   parseKlingError,
 } from "./errorMap";
 import { ensureKlingUrls, isKlingUrlExpired } from "./preUpload";
+import { getCliEntry } from "./cli";
 import {
   clearEnvSnapshot,
   persistEnvSnapshot,
@@ -222,11 +223,14 @@ export async function loadKlingModels(opts?: {
     catalogCache = catalog;
     modelDescriptors = models;
     imageModelDescriptors = imageModels;
+    // CLI 来源（bundled / system）随自检透出，面板显示「内置 runtime」标记
+    const entry = await getCliEntry();
     patchEnv({
       ready: true,
       reason: undefined,
       message: undefined,
       modelCount: models.length,
+      cliSource: entry?.source,
       checkedAt: new Date().toISOString(),
     });
     persistEnvSnapshot(envState, catalog);
@@ -347,6 +351,7 @@ export function bootstrapKlingEnv(): Promise<void> {
         modelCount: snap.modelCount,
         rechargeUrl: snap.rechargeUrl,
         checkedAt: snap.checkedAt,
+        cliSource: snap.cliSource,
       });
       if (snap.catalog) {
         const models = buildKlingModelDescriptors(snap.catalog);

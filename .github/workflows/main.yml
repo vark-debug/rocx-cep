@@ -1,4 +1,4 @@
-name: ZIP Release
+name: Release
 
 on:
   push:
@@ -9,8 +9,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    # 需要 zxpsigncmd 的 darwin 二进制生成 zxp（linux 无签名工具）
+  # macos：zip / zxp / mac pkg（arm64 + x64 双架构，runtime 交叉构建）
+  macos:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
       # 仓库是 yarn.lock（无 package-lock.json），npm ci 不可用
       - run: npm install --legacy-peer-deps
 
-      # ZIP 安装包（未签名，配合 PlayerDebugMode 使用）→ dist/cep/
+      # ZIP 安装包（未签名，配合 PlayerDebugMode 使用）→ dist/cep/ + dist/zxp/
       - run: npm run zip
         env:
           NODE_ENV: production
@@ -38,6 +38,18 @@ jobs:
           (cd release && zip -rq "../RocX-CEP_${VERSION}.zip" com.rocx.cep)
           cp dist/zxp/com.rocx.cep.zxp .
 
+      # 内嵌 runtime 的 mac pkg：双击安装（扩展 + runtime + PlayerDebugMode）
+      - name: Build darwin-arm64 runtime
+        run: node scripts/build-runtime.mjs --platform darwin-arm64 --out build/runtime/darwin-arm64
+
+      - name: Build darwin-x64 runtime
+        run: node scripts/build-runtime.mjs --platform darwin-x64 --out build/runtime/darwin-x64
+
+      - name: Build mac pkgs
+        run: |
+          packagers/mac/build-pkg.sh --arch arm64
+          packagers/mac/build-pkg.sh --arch x64
+
       - name: Upload to GitHub Release
         uses: softprops/action-gh-release@v2
         if: startsWith(github.ref, 'refs/tags/')
@@ -45,4 +57,49 @@ jobs:
           files: |
             RocX-CEP_*.zip
             com.rocx.cep.zxp
+            build/pkg/*.pkg
+          generate_release_notes: true
+
+  # windows：exe 安装包（Inno Setup per-user 免管理员）
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm install --legacy-peer-deps
+
+      # exe 只需要 dist/cep（面板产物）
+      - run: npm run build
+        env:
+          NODE_ENV: production
+
+      - name: Build win-x64 runtime
+        shell: bash
+        run: node scripts/build-runtime.mjs --platform win-x64 --out build/runtime/win-x64
+
+      - name: Read version
+        id: version
+        shell: bash
+        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: cmd
+        run: >
+          "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+          /DMyAppVersion=${{ steps.version.outputs.version }}
+          packagers\win\rocx.iss
+
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          files: |
+            build/exe/*.exe
           generate_release_notes: true

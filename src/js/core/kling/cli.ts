@@ -35,8 +35,10 @@ export interface CliEntry {
   cliJs: string;
   /** CLI 自报版本 */
   version?: string;
-  /** npm 全局包根（含 @klingai 的那一层） */
+  /** npm 全局包根（含 @klingai 的那一层；bundled 时是内嵌 kling 目录） */
   npmRoot: string;
+  /** 来源：bundled = 插件安装器内嵌的 runtime；system = 系统里装的 node+CLI */
+  source: "bundled" | "system";
 }
 
 /** CLI 顶层信封：{ ok, status, body } */
@@ -241,6 +243,70 @@ export function runProcess(
   });
 }
 
+// ---------- 内嵌 runtime（pkg / exe 安装器落位） ----------
+
+/**
+ * 内嵌 runtime 目录布局（scripts/build-runtime.mjs 产出，安装器原样落位）：
+ *   <root>/bin/node(.exe)
+ *   <root>/kling/node_modules/@klingai/cli-cn/dist/cli.js
+ *
+ * 探测顺序：
+ *   1. ~/.rocx/runtime            手动 / 开发兜底
+ *   2. mac: /Library/Application Support/RocX/runtime   （pkg 装到全局）
+ *   3. win: %LOCALAPPDATA%\RocX\runtime                 （exe 装到用户目录）
+ *
+ * 命中即可完全摆脱系统 node/npm 依赖（PR 从 Dock 启动的精简 PATH 也无关紧要）。
+ */
+function bundledRuntimeRoots(): string[] {
+  const roots: string[] = [];
+  const home = homeDir();
+  if (home) roots.push(path.join(home, ".rocx", "runtime"));
+  if (isWindows()) {
+    const localAppData = process.env?.LOCALAPPDATA || "";
+    if (localAppData) {
+      roots.push(path.join(localAppData, "RocX", "runtime"));
+    } else if (home) {
+      roots.push(
+        path.join(home, "AppData", "Local", "RocX", "runtime"),
+      );
+    }
+  } else {
+    roots.push("/Library/Application Support/RocX/runtime");
+  }
+  return roots;
+}
+
+function bundledCliJs(root: string): string {
+  const sep = isWindows() ? "\\" : "/";
+  return [root, "kling", "node_modules", "@klingai", "cli-cn", "dist", "cli.js"].join(sep);
+}
+
+function bundledNodePath(root: string): string {
+  return path.join(root, "bin", nodeExeName());
+}
+
+/** 探测内嵌 runtime；命中返回 entry，未命中返回 null */
+async function locateBundledEntry(): Promise<CliEntry | null> {
+  for (const root of bundledRuntimeRoots()) {
+    const nodePath = bundledNodePath(root);
+    const cliJs = bundledCliJs(root);
+    if (!hasNodeAt(nodePath) || !fs.existsSync(cliJs)) continue;
+    // 内嵌 runtime 可能随版本升级损坏（安装中断等），probe 失败就当没装
+    const probe = await runProcess(nodePath, [cliJs, "--version"], {
+      timeoutMs: 20000,
+    });
+    if (!probe.ok && !probe.out) continue;
+    return {
+      nodePath,
+      cliJs,
+      version: (probe.out || "").trim() || undefined,
+      npmRoot: path.join(root, "kling"),
+      source: "bundled",
+    };
+  }
+  return null;
+}
+
 // ---------- 定位系统 node ----------
 
 /** node 可执行文件名 */
@@ -433,9 +499,13 @@ function cliJsCandidates(npmRoot: string): string[] {
 
 /**
  * 定位可灵 CLI 的执行入口（node + cli.js）。
- * 找不到返回 null。
+ * 先找安装器内嵌 runtime，再回落系统链路；都找不到返回 null。
  */
 async function locateCliEntry(): Promise<CliEntry | null> {
+  // 0) 内嵌 runtime（pkg / exe 安装器落位；完全无需系统 node）
+  const bundled = await locateBundledEntry();
+  if (bundled) return bundled;
+
   const nodePath = await locateSystemNode();
   if (!nodePath) return null;
 
@@ -452,6 +522,7 @@ async function locateCliEntry(): Promise<CliEntry | null> {
         cliJs,
         version: (probe.out || "").trim() || undefined,
         npmRoot: root,
+        source: "system",
       };
     }
   }
@@ -461,12 +532,22 @@ async function locateCliEntry(): Promise<CliEntry | null> {
 /** CLI 入口定位结果缓存（失败不缓存，允许用户装好后立即重试） */
 let entryPromise: Promise<CliEntry | null> | null = null;
 
-/** 取得（并缓存）CLI 入口 */
+/**
+ * 取得（并缓存）CLI 入口。
+ *
+ * 缓存命中后仍要校验文件仍在 —— runtime 可能被用户清理或安装中断回滚，
+ * 失效就清缓存重探一次，自然回落到系统链路（node + npm 全局 CLI）。
+ */
 export async function getCliEntry(): Promise<CliEntry | null> {
   if (!entryPromise) {
     entryPromise = locateCliEntry().catch(() => null);
   }
-  const entry = await entryPromise;
+  let entry = await entryPromise;
+  if (entry && (!hasNodeAt(entry.nodePath) || !fs.existsSync(entry.cliJs))) {
+    resetCliCache();
+    entryPromise = locateCliEntry().catch(() => null);
+    entry = await entryPromise;
+  }
   if (!entry) entryPromise = null;
   return entry;
 }

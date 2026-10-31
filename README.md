@@ -15,9 +15,27 @@ Premiere Pro CEP 面板：在 PR 内直接完成 **参考素材抓取 → 可灵
 
 ## 安装（用户）
 
-### 方式 A：文件夹安装（推荐）
+### 方式 A：安装包（推荐）
 
-从 [Releases](../../releases) 下载 `RocX-CEP_x.y.z.zip`，解压到 CEP 扩展目录：
+从 [Releases](../../releases) 下载对应平台的安装包双击安装：
+
+| 平台 | 文件 | 装到哪里 |
+| --- | --- | --- |
+| macOS (Apple Silicon) | `RocX-CEP_x.y.z_mac_arm64.pkg` | 扩展 → `/Library/Application Support/Adobe/CEP/extensions/`，runtime → `/Library/Application Support/RocX/runtime` |
+| macOS (Intel) | `RocX-CEP_x.y.z_mac_x64.pkg` | 同上 |
+| Windows x64 | `RocX-CEP_x.y.z_win_x64.exe` | 扩展 → `%APPDATA%\Adobe\CEP\extensions\`，runtime → `%LOCALAPPDATA%\RocX\runtime` |
+
+安装包**已内嵌 node + 可灵 CLI runtime**，装完即用，无需自己装 npm/CLI；
+安装脚本自动开启 PlayerDebugMode（macOS 写 `/Library/Preferences`，Windows 写 `HKCU`，均免手动）。
+
+注意事项：
+
+- macOS 未签名安装包：右键 → 打开（首次）；Windows exe：SmartScreen 首次警告点「仍要运行」
+- 登录：面板设置里点「登录」会直接拉起可灵 OAuth 授权
+
+### 方式 B：文件夹安装（zip）
+
+下载 `RocX-CEP_x.y.z.zip`，解压到 CEP 扩展目录：
 
 | 平台 | 目录 |
 | --- | --- |
@@ -42,12 +60,14 @@ Premiere Pro CEP 面板：在 PR 内直接完成 **参考素材抓取 → 可灵
   defaults write com.adobe.CSXS.12 PlayerDebugMode 1
   ```
 
-### 方式 B：ZXP 安装
+### 方式 C：ZXP 安装
 
 下载 Release 里的 `com.rocx.cep.zxp`，拖进 [ZXP Installer](https://install.zxpinstaller.com/)，
 无需改注册表 / PlayerDebugMode。
 
-### 安装可灵 CLI（两种方式都需要）
+### 可灵 CLI（方式 B / C 需要）
+
+方式 A 已内置 runtime，跳过本节。其余安装方式需要系统 node ≥ 18 + 全局 CLI：
 
 ```bash
 npm i -g @klingai/cli-cn

@@ -89,7 +89,14 @@ export const SettingsPanel = () => {
               {env.ready ? "环境就绪" : unknown ? "环境未知" : "环境未就绪"}
             </span>
             <span className={`badge ${cliMissing ? "warn" : "ok"}`}>
-              CLI {cliMissing ? "未安装" : unknown ? "状态未知" : "已安装"}
+              CLI{" "}
+              {cliMissing
+                ? "未安装"
+                : unknown
+                  ? "状态未知"
+                  : env.cliSource === "bundled"
+                    ? "已内置"
+                    : "已安装"}
             </span>
             <span className={`badge ${notLoggedIn ? "warn" : "ok"}`}>
               {notLoggedIn ? "未登录" : unknown ? "状态未知" : "已登录"}

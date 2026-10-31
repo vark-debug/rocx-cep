@@ -114,6 +114,17 @@ export async function installKlingCli(
 ): Promise<InstallResult> {
   const pkg = klingPackageName(region);
 
+  // 内嵌 runtime 已就位 → 无需（也不应）走 npm 安装
+  const existing = await getCliEntry();
+  if (existing?.source === "bundled") {
+    return {
+      ok: true,
+      packageName: pkg,
+      version: existing.version,
+      message: "插件已内置可灵 CLI，无需安装。",
+    };
+  }
+
   onProgress?.("locating_node", "正在定位 Node.js…");
   const nodePath = await locateSystemNode();
   if (!nodePath) {

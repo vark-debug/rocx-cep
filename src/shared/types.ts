@@ -111,6 +111,8 @@ export interface KlingEnvState {
   rechargeUrl?: string;
   /** 上次自检时间（ISO） */
   checkedAt?: string;
+  /** CLI 来源：bundled = 插件内嵌 runtime；system = 系统安装的 node + npm 全局 CLI */
+  cliSource?: "bundled" | "system";
 }
 
 /** 生成任务状态 */
