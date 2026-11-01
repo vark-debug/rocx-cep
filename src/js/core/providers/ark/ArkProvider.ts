@@ -44,7 +44,7 @@ export const ARK_MODEL_LIST: ProviderModelDescriptor[] = [
   {
     providerId: "ark",
     modelId: "doubao-seedream-5-0-pro-260628",
-    displayName: "Seedream 5.0 Pro (火山方舟)",
+    displayName: "Seedream 5.0 Pro",
     description: "火山方舟 Seedream 5.0 Pro，支持透明底（提示词含透明关键词自动生效）",
     paramConstraints: {
       resolutions: ["1K", "2K"],

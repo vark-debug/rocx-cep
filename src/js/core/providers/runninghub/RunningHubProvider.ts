@@ -43,7 +43,7 @@ export const RUNNINGHUB_MODEL_LIST: ProviderModelDescriptor[] = [
   {
     providerId: "runninghub",
     modelId: "seedream-v5-pro",
-    displayName: "Seedream 5.0 Pro（RunningHub）",
+    displayName: "Seedream 5.0 Pro",
     description: "RunningHub Seedream V5 Pro 文生图，单次 1 张，最高 2K",
     paramConstraints: {
       resolutions: ["1K", "2K"],
