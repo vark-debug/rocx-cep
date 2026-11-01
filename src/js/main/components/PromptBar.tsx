@@ -446,30 +446,31 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
         // 图片模式只吃图片参考（视频参考会被可灵拒收）
         const imageRefs = gen.refs.filter((r) => r.type === "reference_image");
         const skipped = gen.refs.length - imageRefs.length;
-        await submitImageGeneration(
-          {
-            model: p.model,
-            prompt: gen.prompt.trim(),
-            ratio: p.ratio,
-            resolution: p.resolution,
-            count: Number(p.count) || 1,
-            references: imageRefs.map((r) => ({
-              type: r.type,
-              localPath: r.localPath,
-            })),
-          },
-          {
-            providerId: curProvider,
-            references: imageRefs.map((r) => ({
-              type: r.type,
-              localPath: r.localPath,
-              fileName: r.fileName,
-              sizeBytes: r.sizeBytes,
-              durationSeconds: r.durationSeconds,
-            })),
-          },
-        );
+        // 先快照请求参数，再清空输入，最后提交（对齐 UXP useImageSubmit：
+        // 建卡后立即清空，不等阻塞的同步提交 —— 方舟一次请求 55~80s）
+        const reqPayload = {
+          model: p.model,
+          prompt: gen.prompt.trim(),
+          ratio: p.ratio,
+          resolution: p.resolution,
+          count: Number(p.count) || 1,
+          references: imageRefs.map((r) => ({
+            type: r.type,
+            localPath: r.localPath,
+          })),
+        };
+        const optRefs = imageRefs.map((r) => ({
+          type: r.type,
+          localPath: r.localPath,
+          fileName: r.fileName,
+          sizeBytes: r.sizeBytes,
+          durationSeconds: r.durationSeconds,
+        }));
         gen.patch({ prompt: "", refs: [] });
+        await submitImageGeneration(reqPayload, {
+          providerId: curProvider,
+          references: optRefs,
+        });
         showToast(
           skipped > 0
             ? `已提交生成任务（忽略 ${skipped} 个视频参考素材）`
@@ -477,31 +478,30 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
         );
         return;
       }
-      await submitGeneration(
-        {
-          model: p.model,
-          prompt: gen.prompt.trim(),
-          ratio: p.ratio,
-          duration: Number(p.duration),
-          resolution: p.resolution,
-          references: gen.refs.map((r) => ({
-            type: r.type,
-            localPath: r.localPath,
-          })),
-        },
-        {
-          providerId: curProvider,
-          references: gen.refs.map((r) => ({
-            type: r.type,
-            localPath: r.localPath,
-            fileName: r.fileName,
-            sizeBytes: r.sizeBytes,
-            durationSeconds: r.durationSeconds,
-          })),
-        },
-      );
-      // 提交后清空提示词与素材（保留参数，方便连续生成）
+      // 同上：先快照，清空，再提交
+      const videoReq = {
+        model: p.model,
+        prompt: gen.prompt.trim(),
+        ratio: p.ratio,
+        duration: Number(p.duration),
+        resolution: p.resolution,
+        references: gen.refs.map((r) => ({
+          type: r.type,
+          localPath: r.localPath,
+        })),
+      };
+      const videoOptRefs = gen.refs.map((r) => ({
+        type: r.type,
+        localPath: r.localPath,
+        fileName: r.fileName,
+        sizeBytes: r.sizeBytes,
+        durationSeconds: r.durationSeconds,
+      }));
       gen.patch({ prompt: "", refs: [] });
+      await submitGeneration(videoReq, {
+        providerId: curProvider,
+        references: videoOptRefs,
+      });
       showToast("已提交生成任务");
     } catch (e: any) {
       showToast(String(e?.message || e));
