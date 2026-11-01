@@ -580,6 +580,12 @@ export async function submitImageGeneration(
   const imageRefs = references.filter((r) => r.type === "reference_image");
   const tool = imageRefs.length ? "image_to_image" : "text_to_image";
 
+  // 同步生成型 provider（如 Ark：/images/generations 一次请求等出图，55~80s）：
+  // 建卡时直接进 generating（跳过排队态），让阻塞等待显示为「生成中」伪计时。
+  // 对齐 UXP useImageSubmit：status: provider.syncGeneration ? "generating" : "pending"
+  const isSync =
+    providerId !== "kling" && getImageProvider(providerId)?.syncGeneration === true;
+
   const record: GenerationRecord = {
     id: newRecordId(),
     kind: "image",
@@ -594,8 +600,9 @@ export async function submitImageGeneration(
       count: req.count,
     },
     references: imageRefs,
-    status: "pending",
-    pendingStage: "preparing",
+    status: isSync ? "generating" : "pending",
+    pendingStage: isSync ? undefined : "preparing",
+    submittedAt: isSync ? nowIso() : undefined,
     createdAt: nowIso(),
     updatedAt: nowIso(),
     projectPath: state.projectPath,
@@ -624,7 +631,8 @@ export async function submitImageGeneration(
       creditsConsumed: submitted.creditsConsumed,
       status: "generating",
       pendingStage: undefined,
-      submittedAt: nowIso(),
+      // 同步 provider 建卡时已写 submittedAt（伪计时起点），不要重置
+      ...(findRecord(record.id)?.submittedAt ? {} : { submittedAt: nowIso() }),
     });
     trackPoll(record.id, submitted.taskId, submitted.traceId || "", "image", providerId);
     // 提交即上报（fire-and-forget；可灵提交即扣费，status=submitted）
@@ -687,9 +695,13 @@ async function pollTask(
 ): Promise<void> {
   let interval = POLL_START_MS;
   let failures = 0;
+  // 非 kling provider 首轮立即查询（同步型 Ark 拿到响应时结果已就绪，
+  // 无谓再等 5s；kling 保留首拍退避 —— 刚提交的任务立刻查可能还没入库）
+  let first = true;
 
   for (;;) {
-    await delay(interval);
+    if (!first || providerId === "kling") await delay(interval);
+    first = false;
 
     try {
       const res: KlingQueryResult =
