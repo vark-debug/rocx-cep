@@ -52,7 +52,8 @@ export const ARK_MODEL_LIST: ProviderModelDescriptor[] = [
       ratios: ["1:1", "4:3", "3:4", "16:9", "9:16"],
       ratioAdaptiveAllowed: false,
     },
-    capabilities: ["imageGeneration"],
+    // 图生图链路：有 refs 时 image 数组直传 dataUris；透明画布仅在无 refs 时启用
+    capabilities: ["imageGeneration", "imageReference"],
   },
 ];
 

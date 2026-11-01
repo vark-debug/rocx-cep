@@ -51,7 +51,8 @@ export const RUNNINGHUB_MODEL_LIST: ProviderModelDescriptor[] = [
       ratios: ["1:1", "4:3", "3:4", "16:9", "9:16"],
       ratioAdaptiveAllowed: false,
     },
-    capabilities: ["imageGeneration"],
+    // 图生图链路：referencesDataUris 非空时路由到 image-to-image（imageUrls=dataUris）
+    capabilities: ["imageGeneration", "imageReference"],
   },
 ];
 
