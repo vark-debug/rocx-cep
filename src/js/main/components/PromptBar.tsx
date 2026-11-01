@@ -3,8 +3,6 @@ import {
   captureClip,
   captureFrame,
   checkKlingReady,
-  clampToApiMax,
-  describeRatio,
   getApiKey,
   getKlingDefaultModel,
   getKlingEnv,
@@ -558,19 +556,11 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
     current?.displayName ||
     current?.modelId ||
     (current ? "无模型" : "模型");
-  // 智能档派生（对齐 UXP ImagePromptInput）：展示层即钳制 —— 标签显示的就是实际会提交的像素
+  // 智能档：UI 只显示「智能」两字 —— 实际像素由 Node 层提交时实时取序列并钳制
   const smartActive = isImage && p.resolution === "智能";
-  const smartClamped =
-    seq.width && seq.height ? clampToApiMax(seq.width, seq.height) : null;
-  const smartLabel = smartClamped
-    ? `智能 ${smartClamped.width}×${smartClamped.height}`
-    : "智能";
   const paramsSummary = isImage
     ? smartActive
-      ? // 智能档：宽高比跟随实际像素推导（选择器里的 ratio 不生效，不展示）
-        smartClamped
-        ? `${describeRatio(smartClamped.width, smartClamped.height)}·智能 ${smartClamped.width}×${smartClamped.height}`
-        : "智能"
+      ? "智能"
       : [p.ratio, p.resolution, p.count ? `${p.count}张` : ""]
           .filter(Boolean)
           .join("·")
@@ -905,7 +895,7 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
                               markImageTouched("size");
                             }}
                           />
-                          <span>{smartLabel}</span>
+                          <span>智能</span>
                         </label>
                       )}
                       {current.resolutions.map((r) => (
