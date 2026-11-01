@@ -1091,6 +1091,16 @@ button {
   &:last-child {
     margin-bottom: 0;
   }
+
+  /* 智能档下画幅组禁用（选择器不生效），降透明度提示（对齐 UXP） */
+  &.disabled {
+    opacity: 0.45;
+    cursor: default;
+
+    .radio-item {
+      cursor: default;
+    }
+  }
 }
 
 .group-label {

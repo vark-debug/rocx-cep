@@ -21,7 +21,13 @@ import type {
   ProviderRef,
   VideoGenCreateRequest,
 } from "./providers";
-import { ratioToSize } from "./providers/runninghub/wireFormat";
+import {
+  billingTierOf,
+  clampToApiMax,
+  IMAGE_1K_MAX_PIXELS,
+  ratioToSize,
+} from "./providers/runninghub/wireFormat";
+import { ARK_1K_MAX_PIXELS } from "./providers/ark/wireFormat";
 import { fileToDataUri } from "./providers/core/http";
 import { getApiKey } from "./storage/apiKeys";
 import { getSequenceInfo, importFiles } from "./ppro";
@@ -33,6 +39,7 @@ import type {
   GenerationRecord,
   GenerationRecordStatus,
   GenerationReference,
+  ImageRecordParams,
   ImportedItem,
   KlingImageRequest,
   KlingQueryResult,
@@ -341,6 +348,8 @@ interface GenericSubmit {
   taskId: string;
   traceId?: string;
   creditsConsumed?: number;
+  /** 图片任务的实际输出像素 / 计价档（仅 HTTP 图片 provider 返回，落 record.imageParams） */
+  imageParams?: ImageRecordParams;
 }
 
 /** GenerationReference → ProviderRef（provider 链引用，含本地路径与文件名） */
@@ -462,9 +471,38 @@ async function submitViaImageProvider(
     }
   }
 
-  // width/height 由 ratio+resolution 映射（预设档）；resolution 归一化到 provider 值域
-  const resolution = /^2k$/i.test(req.resolution) ? "2K" : "1K";
-  const { width, height } = ratioToSize(req.ratio, resolution);
+  // 输出像素决策（对齐 UXP useImageSubmit）：
+  // - 「智能」档 = 提交时实时取活动序列分辨率，超 API 像素上限（4194304，实测 4K 序列报错）
+  //   时等比缩放；计价档按像素总数 + provider 阈值（RunningHub 236 万 / Ark 261 万）算出
+  // - 预设档 = ratio+resolution 映射（"1K"/"2K"，resolution 归一化到 provider 值域）
+  let width: number;
+  let height: number;
+  let resolutionTier: string;
+  if (req.resolution === "智能") {
+    const seq = await getSequenceInfo();
+    if (!seq.ok || !seq.hasSequence || !seq.width || !seq.height) {
+      throw new Error(
+        "未能获取活动序列分辨率，请确认当前项目已打开且含活动序列",
+      );
+    }
+    const clamped = clampToApiMax(seq.width, seq.height);
+    if (clamped.scaled) {
+      console.log(
+        `[image-gen] 序列分辨率 ${seq.width}×${seq.height} 超出 API 上限，等比缩放为 ${clamped.width}×${clamped.height}`,
+      );
+    }
+    width = clamped.width;
+    height = clamped.height;
+    resolutionTier = billingTierOf(
+      width,
+      height,
+      providerId === "ark" ? ARK_1K_MAX_PIXELS : IMAGE_1K_MAX_PIXELS,
+    );
+  } else {
+    const resolution = /^2k$/i.test(req.resolution) ? "2K" : "1K";
+    ({ width, height } = ratioToSize(req.ratio, resolution));
+    resolutionTier = req.resolution;
+  }
 
   const createReq: ImageGenCreateRequest = {
     model: req.model,
@@ -473,13 +511,23 @@ async function submitViaImageProvider(
     width,
     height,
     outputFormat: "png",
-    resolutionTier: req.resolution,
+    resolutionTier,
     count: req.count,
     references: references.map(toProviderRef),
     referencesDataUris: dataUris,
   };
   const r = await provider.createImage(createReq, apiKey);
-  return { taskId: r.taskId, creditsConsumed: r.creditsConsumed };
+  return {
+    taskId: r.taskId,
+    creditsConsumed: r.creditsConsumed,
+    // 实际像素与计价档落记录（智能档下 UI 档位≠真实像素，回填与展示都以此为准）
+    imageParams: {
+      width,
+      height,
+      resolution: resolutionTier,
+      outputFormat: "png",
+    },
+  };
 }
 
 /**
@@ -625,6 +673,7 @@ export async function submitImageGeneration(
             };
           })()
         : await submitViaImageProvider(providerId, req, imageRefs);
+    const submittedRec = findRecord(record.id);
     updateRecord(record.id, {
       taskId: submitted.taskId,
       traceId: submitted.traceId,
@@ -632,7 +681,18 @@ export async function submitImageGeneration(
       status: "generating",
       pendingStage: undefined,
       // 同步 provider 建卡时已写 submittedAt（伪计时起点），不要重置
-      ...(findRecord(record.id)?.submittedAt ? {} : { submittedAt: nowIso() }),
+      ...(submittedRec?.submittedAt ? {} : { submittedAt: nowIso() }),
+      // 智能档：UI 档位不是真实像素 —— params.resolution 覆盖为计价档，
+      // 实际输出像素落 imageParams（记录列表展示 + 回填反推档位用）
+      ...(submitted.imageParams && submittedRec
+        ? {
+            imageParams: submitted.imageParams,
+            params: {
+              ...submittedRec.params,
+              resolution: submitted.imageParams.resolution,
+            },
+          }
+        : {}),
     });
     trackPoll(record.id, submitted.taskId, submitted.traceId || "", "image", providerId);
     // 提交即上报（fire-and-forget；可灵提交即扣费，status=submitted）

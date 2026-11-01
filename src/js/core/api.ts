@@ -94,6 +94,13 @@ export function listProviderImageModels(providerId?: string) {
   return _listProviderImageModels(providerId);
 }
 
+// 图片「智能」档的纯计算工具（无 IO，面板展示 / 回填反推档位用）
+export {
+  clampToApiMax,
+  describeRatio,
+  ratioToSize,
+} from "./providers/runninghub/wireFormat";
+
 export {
   getApiKey,
   setApiKey,

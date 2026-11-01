@@ -9,6 +9,7 @@
  * 本 store 只管「用户正在编辑什么」，不碰任何 I/O。
  */
 import { useCallback, useMemo, useState } from "react";
+import { ratioToSize } from "../core/api";
 import type { GenerationRecord, KlingReferenceType } from "../../shared/types";
 
 /** 生成器里的一条参考素材 */
@@ -62,6 +63,14 @@ export interface GenState {
   video: VideoParams;
   /** 图片参数（mode === "image" 时生效） */
   image: ImageParams;
+  /**
+   * 图片参数是否被用户手动选过（对齐 UXP imageRatioTouched / imageSizeTouched）。
+   *
+   * false → 未手动选过：分辨率取默认（HTTP provider「智能」/ 可灵取服务端声明档），
+   *         画幅比取活动序列比例最近档（「以序列比例为默认」）；
+   * true  → 用户自己选的值，切平台 / 切模型时保留（只做值域收敛）。
+   */
+  imageTouched: { ratio: boolean; size: boolean };
 }
 
 /** 初始状态 */
@@ -71,6 +80,7 @@ export const EMPTY_GEN_STATE: GenState = {
   refs: [],
   video: { provider: "kling", model: "", ratio: "", duration: "", resolution: "" },
   image: { provider: "kling", model: "", ratio: "", resolution: "", count: "" },
+  imageTouched: { ratio: false, size: false },
 };
 
 /** 生成器表单的读写接口 */
@@ -180,9 +190,13 @@ export function useGenStore(): GenStore {
                 provider: rec.params.provider || "kling",
                 model: rec.params.model,
                 ratio: rec.params.ratio,
-                resolution: rec.params.resolution,
+                // params.resolution 存的是计价档（智能档提交后）或 UI 档位；
+                // 有实际像素时反推 UI 档位：与预设映射吻合 → 该档位，否则「智能」
+                resolution: imageResolutionFromRecord(rec),
                 count: String(rec.params.count || 1),
               },
+              // 回填的是记录原值 → 视为用户选定，后续切平台/切模型不再被默认值覆盖
+              imageTouched: { ratio: true, size: true },
             }
           : {
               ...prev,
@@ -223,4 +237,25 @@ export function useGenStore(): GenStore {
     fillFromRecord,
     dirty,
   };
+}
+
+/**
+ * 记录 → UI 分辨率档位（「填入生成器」回填用，对齐 UXP 回填逻辑）。
+ *
+ * params.resolution 存的是计价档（智能档提交后被覆盖）或提交时的 UI 档位：
+ * - 可灵记录：没有 imageParams（实际像素由服务端决定），params.resolution 就是
+ *   服务端档位（"1k"/"2k"/"4k"）→ 直接回填
+ * - HTTP provider 记录：有实际像素 → 与预设映射吻合 → 回填该档位；否则「智能」
+ * - HTTP provider 老记录（无 imageParams）：params.resolution 即当时的 UI 档位 → 直接回填
+ */
+function imageResolutionFromRecord(rec: GenerationRecord): string {
+  if (rec.params.provider === "kling") return rec.params.resolution;
+  const w = rec.imageParams?.width;
+  const h = rec.imageParams?.height;
+  if (!w || !h) return rec.params.resolution;
+  const matched = (["1K", "2K"] as const).find((tier) => {
+    const s = ratioToSize(rec.params.ratio, tier);
+    return s.width === w && s.height === h;
+  });
+  return matched ?? "智能";
 }

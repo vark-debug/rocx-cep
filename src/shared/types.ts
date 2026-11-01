@@ -408,6 +408,21 @@ export interface GenerationError {
   errorType?: string;
 }
 
+/**
+ * 图片记录的实际输出参数（对齐 UXP imageParams）。
+ *
+ * 「智能」档提交时 UI 档位不是真实像素 —— 实际像素 = 活动序列分辨率（超限等比钳制），
+ * params.resolution 存的是计价档（billingTierOf 按像素总数算出的 "1K"/"2K"）。
+ * 这里的 width/height 用于：记录列表展示实际像素 + 「填入生成器」时反推 UI 档位。
+ */
+export interface ImageRecordParams {
+  width: number;
+  height: number;
+  /** 计价档位（"1K" / "2K"） */
+  resolution: string;
+  outputFormat: string;
+}
+
 /** 单条生成记录 */
 export interface GenerationRecord {
   id: string;
@@ -417,6 +432,11 @@ export interface GenerationRecord {
   prompt: string;
   /** 生成参数 */
   params: GenerationParams;
+  /**
+   * 图片记录的实际输出像素 / 计价档（仅 HTTP 图片 provider 写入；可灵走 CLI，
+   * 实际像素由服务端决定，不写此字段）。
+   */
+  imageParams?: ImageRecordParams;
   /** 参考素材 */
   references: GenerationReference[];
   status: GenerationRecordStatus;

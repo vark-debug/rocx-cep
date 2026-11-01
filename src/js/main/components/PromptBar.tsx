@@ -3,6 +3,8 @@ import {
   captureClip,
   captureFrame,
   checkKlingReady,
+  clampToApiMax,
+  describeRatio,
   getApiKey,
   getKlingDefaultModel,
   getKlingEnv,
@@ -156,7 +158,10 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
       (m) => m.modelId === (isImage ? gen.image.model : gen.video.model),
     ) || curProviderModels[0];
 
-  // 模型清单到达 / 切 provider / 换模型后：选定默认模型 + 参数收敛到该模型值域
+  // 模型清单到达 / 切 provider / 换模型后：选定默认模型 + 参数收敛到该模型值域。
+  // 图片侧带 touched 守卫（对齐 UXP imageRatioTouched / imageSizeTouched）：
+  // 用户手动选过的字段只做值域收敛；未选过的取默认值 —— 分辨率「智能」（跟随序列）、
+  // 画幅比取活动序列比例的最近档（「以序列比例为默认」）。
   useEffect(() => {
     if (!current) return;
     gen.patchFn((prev) => {
@@ -164,16 +169,32 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
         const p = prev.image;
         if (p.provider !== curProvider) return {}; // provider 已再次切换，放弃本次收敛
         const def = curProvider === "kling" ? getKlingImageDefaultModel() : "";
+        // 非 kling 支持「智能」档（分辨率跟随活动序列，提交时实时取）；可灵只有档位
+        const smartOk = curProvider !== "kling";
+        const resAllowed = smartOk
+          ? ["智能", ...current.resolutions]
+          : current.resolutions;
+        const touched = prev.imageTouched;
+        const seqRatio = pickClosestRatio(
+          ratioStringFromSize(seq.width || 0, seq.height || 0) || "",
+          current.ratios,
+        );
         return {
           image: {
             ...p,
             model: convergeModel(p.model, curProviderModels, def),
-            ratio: current.ratios.includes(p.ratio)
-              ? p.ratio
-              : current.defaultRatio || current.ratios[0] || "",
-            resolution: current.resolutions.includes(p.resolution)
-              ? p.resolution
-              : current.defaultResolution || current.resolutions[0] || "",
+            ratio: touched.ratio
+              ? current.ratios.includes(p.ratio)
+                ? p.ratio
+                : current.defaultRatio || current.ratios[0] || ""
+              : seqRatio || current.defaultRatio || current.ratios[0] || "",
+            resolution: touched.size
+              ? resAllowed.includes(p.resolution)
+                ? p.resolution
+                : current.defaultResolution || current.resolutions[0] || ""
+              : smartOk
+                ? "智能"
+                : current.defaultResolution || current.resolutions[0] || "",
             count: current.counts.includes(p.count)
               ? p.count
               : current.counts[0] || "1",
@@ -200,7 +221,14 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
       };
     });
     // current / curProviderModels 引用由 useMemo 保持稳定，仅在清单或 provider 变化时触发
-  }, [current, curProviderModels, curProvider, isImage]);
+  }, [current, curProviderModels, curProvider, isImage, seq]);
+
+  /** 用户手动选了图片参数 → 后续切平台/切模型时保留这个选择（UXP 同款 touched） */
+  const markImageTouched = (field: "ratio" | "size") => {
+    gen.patchFn((prev) => ({
+      imageTouched: { ...prev.imageTouched, [field]: true },
+    }));
+  };
 
   // ---- 快捷模板（输入 "/" 唤起，自 UXP 版移植）----
   const [tplOpen, setTplOpen] = useState(false);
@@ -257,8 +285,8 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
         showToast(res.error || "抓帧失败");
         return;
       }
-      // 首次抓帧（push 前没有其他图片参考）：用序列画幅自动填比例。
-      // 仅视频模式生效；「抓帧→PS」路径素材还没确认，不填（UXP 同款）。
+      // 首次抓帧（push 前没有其他图片参考）：用素材画幅自动填参数。
+      // 「抓帧→PS」路径素材还没确认，不填（UXP 同款）。
       const isFirstImageRef = gen.refs.every(
         (r) => r.type !== "reference_image",
       );
@@ -270,8 +298,17 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
         sizeBytes: res.sizeBytes || 0,
         editingInPs: openPs || undefined,
       });
-      if (!openPs && !isImage && isFirstImageRef) {
-        applySmartRatio(res.width || 0, res.height || 0);
+      if (!openPs && isFirstImageRef) {
+        if (isImage) {
+          // 图片模式：抓帧素材分辨率 = 活动序列分辨率 → 分辨率自动设回「智能」
+          //（跟随序列；用户手动选过档位则不动），画幅比同步联动（touched 守卫）
+          if (!gen.imageTouched.size) gen.patchParams({ resolution: "智能" });
+          if (!gen.imageTouched.ratio)
+            applySmartRatio(res.width || 0, res.height || 0);
+        } else {
+          // 视频模式：首个图片参考联动画幅比（UXP 同款，无 touched 概念）
+          applySmartRatio(res.width || 0, res.height || 0);
+        }
       }
       if (openPs) {
         // 不 await：PS 冷启动要 20~40s，不能把 busy 挂那么久；
@@ -443,6 +480,12 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
       }
       const p = curParams(gen);
       if (isImage) {
+        // 智能档预检：提交时 Node 层会实时取序列分辨率，快照已缺失就提前拦截
+        //（不清空输入，用户补上下文后可直接再点生成）
+        if (p.resolution === "智能" && !(seq.hasSequence && seq.width && seq.height)) {
+          showToast("未能获取活动序列分辨率，请确认当前项目已打开且含活动序列");
+          return;
+        }
         // 图片模式只吃图片参考（视频参考会被可灵拒收）
         const imageRefs = gen.refs.filter((r) => r.type === "reference_image");
         const skipped = gen.refs.length - imageRefs.length;
@@ -515,9 +558,25 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
     current?.displayName ||
     current?.modelId ||
     (current ? "无模型" : "模型");
+  // 智能档派生（对齐 UXP ImagePromptInput）：展示层即钳制 —— 标签显示的就是实际会提交的像素
+  const smartActive = isImage && p.resolution === "智能";
+  const smartClamped =
+    seq.width && seq.height ? clampToApiMax(seq.width, seq.height) : null;
+  const smartLabel = smartClamped
+    ? `智能 ${smartClamped.width}×${smartClamped.height}`
+    : "智能";
   const paramsSummary = isImage
-    ? [p.ratio, p.resolution, p.count ? `${p.count}张` : ""].filter(Boolean).join("·")
-    : [p.ratio, p.duration ? `${p.duration}s` : "", p.resolution].filter(Boolean).join("·");
+    ? smartActive
+      ? // 智能档：宽高比跟随实际像素推导（选择器里的 ratio 不生效，不展示）
+        smartClamped
+        ? `${describeRatio(smartClamped.width, smartClamped.height)}·智能 ${smartClamped.width}×${smartClamped.height}`
+        : "智能"
+      : [p.ratio, p.resolution, p.count ? `${p.count}张` : ""]
+          .filter(Boolean)
+          .join("·")
+    : [p.ratio, p.duration ? `${p.duration}s` : "", p.resolution]
+        .filter(Boolean)
+        .join("·");
 
   const fps = seq.fps ? (seq.fps < 1 ? 1 / seq.fps : seq.fps) : 0;
 
@@ -800,8 +859,11 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
               className="param-popover"
               onClick={(e) => e.stopPropagation()}
             >
-              <div className="popover-group">
-                <div className="group-label">画幅</div>
+              {/* 图片智能档下画幅跟随序列分辨率推导，选择器不生效 → 禁用（对齐 UXP） */}
+              <div className={`popover-group${smartActive ? " disabled" : ""}`}>
+                <div className="group-label">
+                  画幅{smartActive ? "（智能档跟随序列分辨率，不生效）" : ""}
+                </div>
                 <div className="radio-row">
                   {current.ratios.map((r) => (
                     <label
@@ -812,7 +874,11 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
                         type="radio"
                         name="ratio"
                         checked={p.ratio === r}
-                        onChange={() => gen.patchParams({ ratio: r })}
+                        disabled={smartActive}
+                        onChange={() => {
+                          gen.patchParams({ ratio: r });
+                          if (isImage) markImageTouched("ratio");
+                        }}
                       />
                       <span>{r}</span>
                     </label>
@@ -825,6 +891,23 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
                   <div className="popover-group">
                     <div className="group-label">分辨率</div>
                     <div className="radio-row">
+                      {curProvider !== "kling" && (
+                        <label
+                          className={`radio-item${p.resolution === "智能" ? " active" : ""}`}
+                          title="跟随当前 PR 序列分辨率"
+                        >
+                          <input
+                            type="radio"
+                            name="img-resolution"
+                            checked={p.resolution === "智能"}
+                            onChange={() => {
+                              gen.patchParams({ resolution: "智能" });
+                              markImageTouched("size");
+                            }}
+                          />
+                          <span>{smartLabel}</span>
+                        </label>
+                      )}
                       {current.resolutions.map((r) => (
                         <label
                           key={r}
@@ -834,7 +917,10 @@ export const PromptBar = ({ gen }: { gen: GenStore }) => {
                             type="radio"
                             name="img-resolution"
                             checked={p.resolution === r}
-                            onChange={() => gen.patchParams({ resolution: r })}
+                            onChange={() => {
+                              gen.patchParams({ resolution: r });
+                              markImageTouched("size");
+                            }}
                           />
                           <span>{r}</span>
                         </label>
